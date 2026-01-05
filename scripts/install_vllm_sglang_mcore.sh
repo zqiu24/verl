@@ -5,11 +5,25 @@ USE_SGLANG=${USE_SGLANG:-1}
 
 export MAX_JOBS=32
 
+# precompiled wheel location: important!
+# export VLLM_PRECOMPILED_WHEEL_LOCATION="https://wheels.vllm.ai/b761df963c2032144468a99bcb39a11e73e16ca4/vllm-1.0.0.dev-cp38-abi3-manylinux1_x86_64.whl"
+wget -O /tmp/vllm-precompiled.whl "https://wheels.vllm.ai/b761df963c2032144468a99bcb39a11e73e16ca4/vllm-1.0.0.dev-cp38-abi3-manylinux1_x86_64.whl"
+export VLLM_PRECOMPILED_WHEEL_LOCATION=/tmp/vllm-precompiled.whl
+# this is important to let the vllm package appear as 0.11.0 in the verl package
+export SETUPTOOLS_SCM_PRETEND_VERSION=0.11.0
+
 echo "1. install inference frameworks and pytorch they need"
-if [ $USE_SGLANG -eq 1 ]; then
-    pip install "sglang[all]==0.5.2" --no-cache-dir && pip install torch-memory-saver --no-cache-dir
-fi
-pip install --no-cache-dir "vllm==0.11.0"
+# pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu129
+# if [ $USE_SGLANG -eq 1 ]; then
+#     pip install "sglang[all]==0.5.2" --no-cache-dir && pip install torch-memory-saver --no-cache-dir
+# fi
+# pip install --no-cache-dir "vllm==0.11.0"
+# cd /lustre/fast/fast/zqiu/NeckariumAI/vllm
+cd /lustre/fast/fast/zqiu/NeckariumAI/vllm
+# VLLM_USE_PRECOMPILED=1 pip install -v --editable . # --no-build-isolation
+# export SETUPTOOLS_SCM_PRETEND_VERSION=0.11.0
+VLLM_USE_PRECOMPILED=1 pip install -v --editable . 
+cd /lustre/fast/fast/zqiu/NeckariumAI/verl
 
 echo "2. install basic packages"
 pip install "transformers[hf_xet]>=4.51.0" accelerate datasets peft hf-transfer \
@@ -28,7 +42,6 @@ echo "3. install FlashAttention and FlashInfer"
 # Install flash-attn-2.8.1 (cxx11abi=False)
 wget -nv https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.1/flash_attn-2.8.1+cu12torch2.8cxx11abiFALSE-cp312-cp312-linux_x86_64.whl && \
     pip install --no-cache-dir flash_attn-2.8.1+cu12torch2.8cxx11abiFALSE-cp312-cp312-linux_x86_64.whl
-
 pip install --no-cache-dir flashinfer-python==0.3.1
 
 
