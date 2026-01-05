@@ -30,7 +30,7 @@ import torch.distributed
 import torch.distributed as dist
 from codetiming import Timer
 from omegaconf import DictConfig, OmegaConf, open_dict
-from peft import LoraConfig, TaskType, get_peft_model
+from peft import LoraConfig, OFTConfig, PeftType, TaskType, get_peft_model
 from safetensors.torch import save_file
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -65,6 +65,7 @@ from verl.utils.fsdp_utils import (
     MixedPrecisionPolicy,
     apply_fsdp2,
     collect_lora_params,
+    collect_oft_params,
     fsdp2_load_full_state_dict,
     fsdp_version,
     get_fsdp_wrap_policy,
@@ -72,11 +73,13 @@ from verl.utils.fsdp_utils import (
     get_shard_placement_fn,
     init_fn,
     layered_summon_lora_params,
+    layered_summon_oft_params,
     load_fsdp_model_to_gpu,
     load_fsdp_optimizer,
     offload_fsdp_model_to_cpu,
     offload_fsdp_optimizer,
     replace_lora_wrapper,
+    replace_oft_wrapper,
 )
 from verl.utils.import_utils import import_external_libs
 from verl.utils.memory_utils import aggressive_empty_cache
@@ -187,6 +190,8 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         self.ulysses_sharding_manager = FSDPUlyssesShardingManager(self.ulysses_device_mesh)
         self._lora_rank = self.config.model.get("lora_rank", 0)
         self._is_lora = self.config.model.get("lora_adapter_path") is not None or self._lora_rank > 0
+        self._oft_block_size = self.config.model.get("oft_block_size", 0)
+        self._is_oft = self.config.model.get("oft_adapter_path") is not None or self._oft_block_size > 0
 
         self.role = role
         assert self.role in ["actor", "rollout", "ref", "actor_rollout", "actor_rollout_ref"]
@@ -461,6 +466,36 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                     "bias": "none",
                 }
                 actor_module = get_peft_model(actor_module, LoraConfig(**lora_config))
+    
+        if self._is_oft:
+            print("Applying OFT to actor module")
+            actor_module.enable_input_require_grads()
+
+            oft_adapter_path = self.config.model.get("oft_adapter_path")
+            if oft_adapter_path is not None:
+                from peft import PeftModel
+
+                print(f"Loading pre-trained OFT adapter to {role} from: {oft_adapter_path}")
+
+                # Copy adapter to local if needed
+                local_adapter_path = copy_to_local(oft_adapter_path, use_shm=self.config.model.get("use_shm", False))
+
+                actor_module = PeftModel.from_pretrained(actor_module, local_adapter_path, is_trainable=True)
+                peft_config = actor_module.peft_config["default"]
+                # Ensure task_type is TaskType enum, not string
+                if isinstance(peft_config.task_type, str):
+                    peft_config.task_type = TaskType.CAUSAL_LM
+
+            else:
+                # Convert config to regular Python types before creating PEFT model
+                oft_config = {
+                    "task_type": TaskType.CAUSAL_LM,
+                    "oft_block_size": self.config.model.oft_block_size,
+                    "target_modules": convert_to_regular_types(self.config.model.target_modules),
+                    "exclude_modules": convert_to_regular_types(self.config.model.exclude_modules),
+                    "bias": "none",
+                }
+                actor_module = get_peft_model(actor_module, OFTConfig(**oft_config))
 
         self.use_orig_params = fsdp_config.get("use_orig_params", False)
         if self.config.actor.get("freeze_vision_tower", False):
@@ -498,6 +533,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             module=actor_module,
             config=fsdp_config.get("wrap_policy", None),
             is_lora=self._is_lora,
+            is_oft=self._is_oft,
         )
 
         # if self._is_rollout and self.config.rollout.name == "hf":
@@ -684,15 +720,26 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
         peft_config = None
         peft_model = getattr(self.actor_module_fsdp, "_fsdp_wrapped_module", self.actor_module_fsdp)
-        if hasattr(peft_model, "peft_config"):  # LoRA
+        if hasattr(peft_model, "peft_config"):  # LoRA / OFT
             peft_config = peft_model.peft_config.get("default", None)
-            params = collect_lora_params(
-                module=self.actor_module_fsdp,
-                layered_summon=self.config.rollout.get("layered_summon", False),
-                base_sync_done=self.base_sync_done,
-            )
-            if not self.base_sync_done:
-                params = {replace_lora_wrapper(k, peft_config): v for k, v in params.items()}
+            if peft_config.peft_type == PeftType.LORA:
+                params = collect_lora_params(
+                    module=self.actor_module_fsdp,
+                    layered_summon=self.config.rollout.get("layered_summon", False),
+                    base_sync_done=self.base_sync_done,
+                )
+                if not self.base_sync_done:
+                    params = {replace_lora_wrapper(k, peft_config): v for k, v in params.items()}
+            elif peft_config.peft_type == PeftType.OFT:
+                params = collect_oft_params(
+                    module=self.actor_module_fsdp,
+                    layered_summon=self.config.rollout.get("layered_summon", False),
+                    base_sync_done=self.base_sync_done,
+                )
+                if not self.base_sync_done:
+                    params = {replace_oft_wrapper(k, peft_config): v for k, v in params.items()}
+            else:
+                raise ValueError(f"Unknown PEFT type: {peft_config.peft_type}")
         else:
             params = self.actor_module_fsdp.state_dict()
 
@@ -700,20 +747,31 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             params, getattr(self.actor_module_fsdp, "_fsdp_wrapped_module", self.actor_module_fsdp)
         )
 
-        # Special handling for LoRA with sleep_level=2:
+        # Special handling for LoRA / OFT with sleep_level=2:
         # When sleep_level=2, base model weights are destroyed during each sleep cycle.
-        # separately collect and update LoRA weights and base model weights through their respective interfaces.
-        # Here: params contains LoRA weights, base_model_params contains base model weights.
+        # separately collect and update LoRA / OFT weights and base model weights through their respective interfaces.
+        # Here: params contains LoRA / OFT weights, base_model_params contains base model weights.
         if peft_config is not None and getattr(self.rollout, "sleep_level", None) == 2:
-            base_model_params = collect_lora_params(
-                module=self.actor_module_fsdp,
-                layered_summon=self.layered_summon,
-                base_sync_done=False,
-            )
-            base_model_params = {replace_lora_wrapper(k, peft_config): v for k, v in base_model_params.items()}
-            base_model_params = convert_weight_keys(
-                base_model_params, getattr(self.actor_module_fsdp, "_fsdp_wrapped_module", self.actor_module_fsdp)
-            )
+            if peft_config.peft_type == PeftType.LORA:
+                base_model_params = collect_lora_params(
+                    module=self.actor_module_fsdp,
+                    layered_summon=self.layered_summon,
+                    base_sync_done=False,
+                )
+                base_model_params = {replace_lora_wrapper(k, peft_config): v for k, v in base_model_params.items()}
+                base_model_params = convert_weight_keys(
+                    base_model_params, getattr(self.actor_module_fsdp, "_fsdp_wrapped_module", self.actor_module_fsdp)
+                )
+            elif peft_config.peft_type == PeftType.OFT:
+                base_model_params = collect_oft_params(
+                    module=self.actor_module_fsdp,
+                    layered_summon=self.layered_summon,
+                    base_sync_done=False,
+                )
+                base_model_params = {replace_oft_wrapper(k, peft_config): v for k, v in base_model_params.items()}
+                base_model_params = convert_weight_keys(
+                    base_model_params, getattr(self.actor_module_fsdp, "_fsdp_wrapped_module", self.actor_module_fsdp)
+                )
 
         log_gpu_memory_usage("Before offload_fsdp_model_to_cpu", logger=logger)
         if self._is_offload_param:
@@ -998,7 +1056,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="actor"))
     @DistProfiler.annotate(color="blue", role="actor_compute_log_prob")
     def compute_log_prob(self, data: DataProto):
-        # when is_lora is True, we use the actor without lora applied to calculate the log_prob
+        # when is_lora / is_oft is True, we use the actor without lora / oft applied to calculate the log_prob
         # which is mostly used for ref log_prob calculation
         assert self._is_actor
         if self._is_offload_param:
@@ -1008,9 +1066,12 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         from contextlib import nullcontext
 
         is_lora = data.meta_info.pop("is_lora", False)
-        adapter_ctx = self.actor.actor_module.disable_adapter() if is_lora else nullcontext()
+        is_oft = data.meta_info.pop("is_oft", False)
+        is_adapter = is_lora or is_oft
+
+        adapter_ctx = self.actor.actor_module.disable_adapter() if is_adapter else nullcontext()
         # we should always recompute old_log_probs when it is HybridEngine
-        config_source = self.config.ref if is_lora else self.config.rollout
+        config_source = self.config.ref if is_adapter else self.config.rollout
         data.meta_info["micro_batch_size"] = config_source.log_prob_micro_batch_size_per_gpu
         data.meta_info["max_token_len"] = config_source.log_prob_max_token_len_per_gpu
         data.meta_info["use_dynamic_bsz"] = config_source.log_prob_use_dynamic_bsz
@@ -1018,9 +1079,9 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         # perform recompute log_prob
         with self.ulysses_sharding_manager:
             with adapter_ctx:
-                output, entropys = self.actor.compute_log_prob(data=data, calculate_entropy=not is_lora)
-            tensors = {"ref_log_prob": output} if is_lora else {"old_log_probs": output}
-            if not is_lora:
+                output, entropys = self.actor.compute_log_prob(data=data, calculate_entropy=not is_adapter)
+            tensors = {"ref_log_prob": output} if is_adapter else {"old_log_probs": output}
+            if not is_adapter:
                 tensors["entropys"] = entropys
             output = DataProto.from_dict(
                 tensors=tensors,
@@ -1046,6 +1107,10 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         if self._is_lora:
             # if _is_lora, actor without lora applied is the ref
             data.meta_info["is_lora"] = True
+            return self.compute_log_prob(data)
+        if self._is_oft:
+            # if _is_oft, actor without oft applied is the ref
+            data.meta_info["is_oft"] = True
             return self.compute_log_prob(data)
         assert self._is_ref
         # else:
@@ -1114,6 +1179,37 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             dist.barrier()
             log_with_rank(
                 f"[rank-{self.rank}]: Saved LoRA adapter to: {lora_save_path}",
+                rank=dist.get_rank(),
+                logger=logger,
+                log_only_rank_0=True,
+            )
+
+        if self._is_oft and hasattr(getattr(self, "actor_module", self.actor_module_fsdp), "peft_config"):
+            oft_save_path = os.path.join(local_path, "oft_adapter")
+            peft_model = getattr(self, "actor_module", self.actor_module_fsdp)
+            peft_config = {}
+            if dist.get_rank() == 0:
+                os.makedirs(oft_save_path, exist_ok=True)
+                peft_config = asdict(peft_model.peft_config.get("default", {}))
+                peft_config["task_type"] = peft_config["task_type"].value
+                peft_config["peft_type"] = peft_config["peft_type"].value
+                peft_config["target_modules"] = list(peft_config["target_modules"])
+            try:
+                if fsdp_version(self.actor_module_fsdp) > 0:
+                    self.actor_module_fsdp = self.actor_module_fsdp.to(get_device_name())
+                    oft_params = layered_summon_oft_params(self.actor_module_fsdp)
+                    if dist.get_rank() == 0:
+                        save_file(oft_params, os.path.join(oft_save_path, "adapter_model.safetensors"))
+                        with open(os.path.join(oft_save_path, "adapter_config.json"), "w", encoding="utf-8") as f:
+                            json.dump(peft_config, f, ensure_ascii=False, indent=4)
+            except Exception as e:
+                log_with_rank(
+                    f"Save OFT Adapter Error ({e})", rank=dist.get_rank(), logger=logger, log_only_rank_0=True
+                )
+
+            dist.barrier()
+            log_with_rank(
+                f"[rank-{self.rank}]: Saved OFT adapter to: {oft_save_path}",
                 rank=dist.get_rank(),
                 logger=logger,
                 log_only_rank_0=True,
@@ -1256,6 +1352,9 @@ class CriticWorker(Worker, DistProfilerExtension):
         self._is_lora = (
             self.config.model.get("lora_adapter_path") is not None or self.config.model.get("lora_rank", 0) > 0
         )
+        self._is_oft = (
+            self.config.model.get("oft_adapter_path") is not None or self.config.model.get("oft_block_size", 0) > 0
+        )
         self.use_orig_params = self.config.model.fsdp_config.get("use_orig_params", False)
 
     def _build_critic_model_optimizer(self, config):
@@ -1386,6 +1485,39 @@ class CriticWorker(Worker, DistProfilerExtension):
                     "bias": "none",
                 }
                 critic_module = get_peft_model(critic_module, LoraConfig(**lora_config))
+
+        if self._is_oft:
+            print("Applying OFT to critic module")
+            critic_module.enable_input_require_grads()
+
+            # Check if we should load a pre-trained OFT adapter
+            oft_adapter_path = self.config.model.get("oft_adapter_path")
+            if oft_adapter_path is not None:
+                from peft import PeftModel
+
+                print(f"Loading pre-trained OFT adapter to critic from: {oft_adapter_path}")
+
+                # Copy adapter to local if needed
+                local_adapter_path = copy_to_local(oft_adapter_path, use_shm=self.config.model.get("use_shm", False))
+
+                critic_module = PeftModel.from_pretrained(critic_module, local_adapter_path, is_trainable=True)
+                peft_config = critic_module.peft_config["default"]
+                # Ensure task_type is TaskType enum, not string
+                # Use TOKEN_CLS for Critic since it's loaded as AutoModelForTokenClassification
+                if isinstance(peft_config.task_type, str):
+                    peft_config.task_type = TaskType.TOKEN_CLS
+
+            else:
+                # Convert config to regular Python types before creating PEFT model
+                # Use TOKEN_CLS for Critic since it's loaded as AutoModelForTokenClassification
+                oft_config = {
+                    "task_type": TaskType.TOKEN_CLS,
+                    "oft_block_size": self.config.model.oft_block_size,
+                    "target_modules": convert_to_regular_types(self.config.model.target_modules),
+                    "exclude_modules": convert_to_regular_types(self.config.model.exclude_modules),
+                    "bias": "none",
+                }
+                critic_module = get_peft_model(critic_module, OFTConfig(**oft_config))
 
         if self.rank == 0:
             print_model_size(critic_module)

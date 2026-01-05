@@ -82,11 +82,18 @@ class HFModelConfig(BaseConfig):
 
     exclude_modules: Optional[str] = None
 
+    # fsdp oft related. We may setup a separate config later
+    oft_block_size: int = 0
+
     # megatron lora config
     lora: dict[str, Any] = field(default_factory=dict)
 
     # path to pre-trained LoRA adapter to load for continued training
     lora_adapter_path: Optional[str] = None
+
+    # path to pre-trained OFT adapter to load for continued training
+    oft_adapter_path: Optional[str] = None
+
     use_liger: bool = False
 
     use_fused_kernels: bool = False

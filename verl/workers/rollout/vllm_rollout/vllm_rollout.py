@@ -41,7 +41,7 @@ import zmq
 import zmq.asyncio
 from filelock import FileLock
 from torch.distributed.device_mesh import DeviceMesh
-from vllm.config import LoRAConfig
+from vllm.config import LoRAConfig, OFTConfig
 
 from verl.utils.ray_utils import get_event_loop
 
@@ -68,6 +68,10 @@ from verl.workers.rollout.vllm_rollout.utils import (
     VLLM_LORA_NAME,
     VLLM_LORA_PATH,
     get_vllm_max_lora_rank,
+    VLLM_OFT_INT_ID,
+    VLLM_OFT_NAME,
+    VLLM_OFT_PATH,
+    get_vllm_max_oft_block_size,
 )
 
 logger = logging.getLogger(__file__)
@@ -125,6 +129,11 @@ class vLLMAsyncRollout(BaseRollout):
         self.lora_config = (
             {"max_loras": 1, "max_lora_rank": get_vllm_max_lora_rank(self.model_config.lora_rank)}
             if self.model_config.lora_rank > 0
+            else {}
+        )
+        self.oft_config = (
+            {"max_ofts": 1, "max_oft_block_size": get_vllm_max_oft_block_size(self.model_config.oft_block_size)}
+            if self.model_config.oft_block_size > 0
             else {}
         )
 
@@ -190,6 +199,13 @@ class vLLMAsyncRollout(BaseRollout):
         if self.lora_config:
             lora_dtype = getattr(torch, self.config.dtype)
             self.vllm_config.lora_config = LoRAConfig(lora_dtype=lora_dtype, **self.lora_config)
+            print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+            print(f"vllm_config.lora_config: {self.vllm_config.lora_config}")
+            print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+            exit()
+        # if self.oft_config:
+        #     oft_dtype = getattr(torch, self.config.dtype)
+        #     self.vllm_config.oft_config = OFTConfig(oft_dtype=oft_dtype, **self.oft_config)
         if self.config.quantization is not None:
             _SUPPORTED_QUANTIZATION = ["fp8", "torchao"]
             if self.config.quantization not in _SUPPORTED_QUANTIZATION:
@@ -239,8 +255,11 @@ class vLLMAsyncRollout(BaseRollout):
         """
         peft_config, base_sync_done = kwargs.get("peft_config", None), kwargs.get("base_sync_done", False)
         if peft_config and base_sync_done:
-            # In async mode, make sure the old lora is removed before adding the new one
-            self.inference_engine.worker.remove_lora(VLLM_LORA_INT_ID)
+            # In async mode, make sure the old lora / oft is removed before adding the new one
+            if peft_config.peft_type == PeftType.LORA:
+                self.inference_engine.worker.remove_lora(VLLM_LORA_INT_ID)
+            elif peft_config.peft_type == PeftType.OFT:
+                self.inference_engine.worker.remove_oft(VLLM_OFT_INT_ID)
             weights = dict(weights)
             lora_request = TensorLoRARequest(
                 lora_name=VLLM_LORA_NAME,

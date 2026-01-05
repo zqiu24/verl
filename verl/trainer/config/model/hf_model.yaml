@@ -45,14 +45,20 @@ lora_rank: 0
 # LoRA scaling factor
 lora_alpha: 16
 
-# Target modules for LoRA adaptation
+# Target modules for LoRA / OFT adaptation
 target_modules: all-linear
 
-# Exclude modules from LoRA adaptation
+# Exclude modules from LoRA / OFT adaptation
 exclude_modules: null
 
 # Path to pre-trained LoRA adapter to load for continued training
 lora_adapter_path: null
+
+# Set to positive value to enable OFT (e.g., 16)
+oft_block_size: 0
+
+# Path to pre-trained OFT adapter to load for continued training
+oft_adapter_path: null
 
 # whether to use liger. Only valid when we use hf model definition
 use_liger: False

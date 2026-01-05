@@ -17,6 +17,9 @@ VLLM_LORA_INT_ID = 123
 VLLM_LORA_NAME = "123"
 VLLM_LORA_PATH = "simon_lora_path"
 
+VLLM_OFT_INT_ID = 456
+VLLM_OFT_NAME = "456"
+VLLM_OFT_PATH = "simon_oft_path"
 
 def get_vllm_max_lora_rank(lora_rank: int):
     """
@@ -32,3 +35,19 @@ def get_vllm_max_lora_rank(lora_rank: int):
             return rank
 
     raise ValueError(f"lora_rank must be less than or equal to {vllm_max_lora_ranks[-1]}, but got {lora_rank}")
+
+
+def get_vllm_max_oft_block_size(oft_block_size: int):
+    """
+    For vLLM, the smallest `max_oft_block_size` is 8, and allowed values are (8, 16, 32, 64, 128, 256, 320, 512)
+    This function automatically adjusts the `max_oft_block_size` to the nearest allowed value.
+
+    Reference: https://github.com/vllm-project/vllm/blob/8a297115e2367d463b781adb86b55ac740594cf6/vllm/config/oft.py#L27
+    """
+    assert oft_block_size > 0, f"oft_block_size must be greater than 0 to invoke this function, get {oft_block_size}"
+    vllm_max_oft_block_sizes = [8, 16, 32, 64, 128, 256, 320, 512]
+    for block_size in vllm_max_oft_block_sizes:
+        if oft_block_size <= block_size:
+            return block_size
+
+    raise ValueError(f"oft_block_size must be less than or equal to {vllm_max_oft_block_sizes[-1]}, but got {oft_block_size}")

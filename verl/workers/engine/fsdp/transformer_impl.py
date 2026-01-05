@@ -81,7 +81,7 @@ class FSDPEngine(BaseEngine):
     """
     Concrete Engine implementation using PyTorch FullyShardedDataParallel (FSDP).
 
-    Supports model sharding, activation/optimizer offloading, LoRA, and sequence parallelism.
+    Supports model sharding, activation/optimizer offloading, LoRA, OFT, and sequence parallelism.
     """
 
     def __init__(
@@ -279,6 +279,37 @@ class FSDPEngine(BaseEngine):
                 "bias": "none",
             }
             module = get_peft_model(module, LoraConfig(**lora_config))
+
+        return module
+
+    def _build_oft_module(self, module):
+        module.enable_input_require_grads()
+
+        oft_adapter_path = getattr(self.model_config, "oft_adapter_path", None)
+        if oft_adapter_path is not None:
+            from peft import PeftModel
+
+            from verl.utils.fs import copy_to_local
+
+            print(f"Loading pre-trained OFT adapter to from: {oft_adapter_path}")
+            # Copy adapter to local if needed
+            local_adapter_path = copy_to_local(oft_adapter_path, use_shm=self.model_config.use_shm)
+
+            module = PeftModel.from_pretrained(module, local_adapter_path, is_trainable=True)
+            peft_config = module.peft_config["default"]
+            # Ensure task_type is TaskType enum, not string
+            if isinstance(peft_config.task_type, str):
+                peft_config.task_type = TaskType.CAUSAL_LM
+        else:
+            # Convert config to regular Python types before creating PEFT model
+            oft_config = {
+                "task_type": TaskType.CAUSAL_LM,
+                "oft_block_size": self.model_config.oft_block_size,
+                "target_modules": convert_to_regular_types(self.model_config.target_modules),
+                "exclude_modules": convert_to_regular_types(self.model_config.exclude_modules),
+                "bias": "none",
+            }
+            module = get_peft_model(module, LoraConfig(**oft_config))
 
         return module
 

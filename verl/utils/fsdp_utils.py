@@ -70,13 +70,14 @@ def get_init_weight_context_manager(use_meta_tensor=True, mesh: DeviceMesh = Non
 
 # Copyright 2020-present the HuggingFace Inc. team.
 # Adapted from https://github.com/huggingface/transformers/src/transformers/trainer.py
-def get_fsdp_wrap_policy(module, config=None, is_lora=False):
+def get_fsdp_wrap_policy(module, config=None, is_lora=False, is_oft=False):
     """Get FSDP wrap policy for the module.
 
     Args:
         module: The module to get wrap policy for
         config: Configuration for wrap policy
         is_lora: Whether to enable lambda policy for LoRA modules
+        is_oft: Whether to enable lambda policy for OFT modules
     """
     if config is None:
         config = {}
@@ -113,6 +114,17 @@ def get_fsdp_wrap_policy(module, config=None, is_lora=False):
                 and module.weight.requires_grad
             )
 
+        lambda_policy = functools.partial(lambda_auto_wrap_policy, lambda_fn=lambda_policy_fn)
+        policies.append(lambda_policy)
+
+    # Add lambda policy for OFT modules if is_oft is True
+    if is_oft:
+        def lambda_policy_fn(module):
+            return bool(
+                len(list(module.named_children())) == 0
+                and getattr(module, "weight", None) is not None
+                and module.weight.requires_grad
+            )
         lambda_policy = functools.partial(lambda_auto_wrap_policy, lambda_fn=lambda_policy_fn)
         policies.append(lambda_policy)
 
@@ -608,6 +620,48 @@ def layered_summon_lora_params(fsdp_module) -> OrderedDict:
     return lora_params
 
 
+def layered_summon_oft_params(fsdp_module) -> OrderedDict:
+    from peft.utils.save_and_load import get_peft_model_state_dict
+
+    def __prefix_submodules(module, prefix):
+        for name, submodule in module.named_modules():
+            if name.startswith(prefix) and "." not in name[len(prefix) :]:
+                yield name, submodule
+
+    oft_params = OrderedDict()
+    prefix_list = [
+        # fsdp
+        "_fsdp_wrapped_module.base_model.model.",
+        "_fsdp_wrapped_module.base_model.model.model.",
+        "_fsdp_wrapped_module.base_model.model.model.layers.",
+        "_fsdp_wrapped_module.base_model.model.model.language_model.layers.",
+        # fsdp2
+        "base_model.model.",
+        "base_model.model.model.",
+        "base_model.model.model.layers.",
+        "base_model.model.model.language_model.layers.",
+    ]
+    peft_model = getattr(fsdp_module, "_fsdp_wrapped_module", fsdp_module)
+    for prefix in prefix_list:
+        for name, submodule in __prefix_submodules(fsdp_module, prefix):
+            prefix = name.replace("_fsdp_wrapped_module.base_model.model.", "base_model.model.")
+            if name.endswith(".model") or name.endswith(".layers"):
+                continue
+            if fsdp_version(submodule) > 0:
+                with FSDP.summon_full_params(submodule, writeback=False):
+                    sub_oft_params = get_peft_model_state_dict(peft_model, state_dict=submodule.state_dict())
+                    sub_oft_params = {
+                        f"{prefix}.{name}": param.full_tensor().detach().cpu()
+                        if hasattr(param, "full_tensor")
+                        else param.detach().cpu()
+                        for name, param in sub_oft_params.items()
+                    }
+                    oft_params.update(sub_oft_params)
+                    submodule._is_root = False
+                get_torch_device().empty_cache()
+    return oft_params
+
+
 def collect_lora_params(module: FSDP, layered_summon: bool, base_sync_done: bool) -> OrderedDict:
     """
     collect lora params or full params if base model is not ready in vllm
@@ -666,10 +720,94 @@ def collect_lora_params(module: FSDP, layered_summon: bool, base_sync_done: bool
     return lora_params
 
 
+def collect_oft_params(module: FSDP, layered_summon: bool, base_sync_done: bool) -> OrderedDict:
+    """
+    collect oft params or full params if base model is not ready in vllm
+    work with if isinstance(self.module._fsdp_wrapped_module, PeftModel)
+    """
+    from peft.utils.save_and_load import get_peft_model_state_dict
+
+    oft_params = OrderedDict()
+    peft_model = getattr(module, "_fsdp_wrapped_module", module)
+    if fsdp_version(module) > 0:
+        if layered_summon:
+            if not base_sync_done:
+                raise ValueError(
+                    "To use layered_summon, you must make sure base-model is preloaded in vllm, e.g. let "
+                    "rollout.load_format=safetensors"
+                )
+            oft_params = layered_summon_oft_params(module)
+        else:
+            with FSDP.summon_full_params(module, writeback=False):
+                if base_sync_done:
+                    oft_params = get_peft_model_state_dict(peft_model)
+                    oft_params = {
+                        name: param.full_tensor().detach().cpu()
+                        if hasattr(param, "full_tensor")
+                        else param.detach().cpu()
+                        for name, param in oft_params.items()
+                    }
+                else:
+                    model = peft_model.base_model.model
+                    orig_dev = "cpu" if "cpu" in str(next(model.parameters()).device) else get_device_name()
+                    model = model.to("cpu")
+                    for name, param in model.state_dict().items():
+                        if any(x in name for x in ["_flat_param", "oft_"]):
+                            continue
+                        name = name.replace("_fsdp_wrapped_module.", "").replace(".base_layer", "")
+                        oft_params[name] = (
+                            param.full_tensor().detach().cpu()
+                            if hasattr(param, "full_tensor")
+                            else param.detach().cpu()
+                        )
+                    model = model.to(orig_dev)
+            get_torch_device().empty_cache()
+    else:
+        if base_sync_done:
+            oft_params = get_peft_model_state_dict(peft_model)
+        else:
+            model = peft_model.base_model.model
+            orig_dev = "cpu" if "cpu" in str(next(model.parameters()).device) else get_device_name()
+            model = model.to("cpu")
+            for name, param in model.state_dict().items():
+                if any(x in name for x in ["_flat_param", "oft_"]):
+                    continue
+                name = name.replace("_fsdp_wrapped_module.", "").replace(".base_layer", "")
+                oft_params[name] = param.detach().cpu()
+            model = model.to(orig_dev)
+    return oft_params
+
 def replace_lora_wrapper(k, peft_config):
     """Replace LoRA parameter keys with base layer equivalents.
 
     Transforms LoRA parameter names to their corresponding base layer
+    names for proper weight loading in vLLM when base model sync is not done.
+
+    Args:
+        k (str): Original parameter key name.
+
+    Returns:
+        str: Transformed parameter key for base layer.
+    """
+    stacked_params = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+    if k.endswith(".weight"):
+        module_k = k[: -len(".weight")]
+        if check_exclude_modules(peft_config, module_k):
+            return k
+        elif any([module_k.endswith(s) for s in stacked_params]) or check_target_modules(peft_config, module_k):
+            return f"{module_k}.base_layer.weight"
+    if k.endswith(".bias"):
+        module_k = k[: -len(".bias")]
+        if check_exclude_modules(peft_config, module_k):
+            return k
+        elif any([module_k.endswith(s) for s in stacked_params]) or check_target_modules(peft_config, module_k):
+            return f"{module_k}.base_layer.bias"
+    return k
+
+def replace_oft_wrapper(k, peft_config):
+    """Replace OFT parameter keys with base layer equivalents.
+
+    Transforms OFT parameter names to their corresponding base layer
     names for proper weight loading in vLLM when base model sync is not done.
 
     Args:
