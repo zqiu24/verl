@@ -36,6 +36,7 @@ from vllm.entrypoints.openai.api_server import (
 )
 from vllm.inputs import TokensPrompt
 from vllm.lora.request import LoRARequest
+from vllm.oft.request import OFTRequest
 from vllm.outputs import RequestOutput
 from vllm.usage.usage_lib import UsageContext
 from vllm.v1.engine.async_llm import AsyncLLM
@@ -55,6 +56,11 @@ from verl.workers.rollout.vllm_rollout.utils import (
     VLLM_LORA_NAME,
     VLLM_LORA_PATH,
     get_vllm_max_lora_rank,
+    VLLM_OFT_INT_ID,
+    VLLM_OFT_NAME,
+    VLLM_OFT_PATH,
+    get_vllm_max_oft_block_size,
+    get_vllm_min_oft_block_size,
 )
 
 _VLLM_VERSION = version.parse(vllm.__version__)
@@ -354,6 +360,17 @@ class vLLMHttpServerBase:
                     "max_lora_rank": get_vllm_max_lora_rank(self.model_config.lora_rank),
                 }
             )
+        
+        # update oft-related args
+        if self.model_config.oft_block_size > 0:
+            args.update(
+                {
+                    "enable_oft": True,
+                    "max_ofts": 1,
+                    "max_oft_block_size": get_vllm_max_oft_block_size(self.model_config.oft_block_size),
+                    "min_oft_block_size": get_vllm_min_oft_block_size(self.model_config.oft_block_size),
+                }
+            )
 
         if self.config.enable_rollout_routing_replay:
             args.update({"enable_return_routed_experts": True})
@@ -512,9 +529,19 @@ class vLLMHttpServerBase:
                 lora_request = LoRARequest(
                     lora_name=VLLM_LORA_NAME, lora_int_id=VLLM_LORA_INT_ID, lora_path=VLLM_LORA_PATH
                 )
+        
+        # Add oft request
+        oft_request = None
+        if self.model_config.oft_block_size > 0:
+            # Make sure we also check that the oft is already loaded in the engine
+            oft_loaded = VLLM_OFT_INT_ID in await self.engine.list_ofts()
+            if oft_loaded:
+                oft_request = OFTRequest(
+                    oft_name=VLLM_OFT_NAME, oft_int_id=VLLM_OFT_INT_ID, oft_path=VLLM_OFT_PATH
+                )
 
         generator = self.engine.generate(
-            prompt=prompt, sampling_params=sampling_params, request_id=request_id, lora_request=lora_request
+            prompt=prompt, sampling_params=sampling_params, request_id=request_id, lora_request=lora_request, oft_request=oft_request
         )
 
         # Get final response

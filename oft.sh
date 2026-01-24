@@ -11,4 +11,9 @@ export WANDB_NAME="qwen2.5_3b_grpo_oft"
 
 # [ -f "$REPO_ROOT/wandb_api.sh" ] && source "$REPO_ROOT/wandb_api.sh"
 
+export VERL_DEBUGPY=1
+export VERL_DEBUGPY_PORT=5678
+export VLLM_TORCH_COMPILE_LEVEL=0
+
+
 bash examples/grpo_trainer/run_qwen2_5-3b_gsm8k_grpo_oft.sh

@@ -11,4 +11,6 @@ export WANDB_NAME="qwen2.5_3b_grpo_lora"
 
 # [ -f "$REPO_ROOT/wandb_api.sh" ] && source "$REPO_ROOT/wandb_api.sh"
 
+export VLLM_TORCH_COMPILE_LEVEL=0
+
 bash examples/grpo_trainer/run_qwen2_5-3b_gsm8k_grpo_lora.sh

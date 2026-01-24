@@ -58,7 +58,7 @@ from verl.third_party.vllm import VLLM_SLEEP_LEVEL, get_version
 from verl.utils.device import is_npu_available
 from verl.utils.distributed import initialize_global_process_group_ray
 from verl.utils.ray_utils import ray_noset_visible_devices
-from verl.utils.vllm import TensorLoRARequest, VLLMHijack, is_version_ge
+from verl.utils.vllm import TensorLoRARequest, TensorOFTRequest, VLLMHijack, is_version_ge
 from verl.utils.vllm.vllm_fp8_utils import apply_vllm_fp8_patches, is_fp8_model, load_quanted_weights
 from verl.workers.config import HFModelConfig, RolloutConfig
 from verl.workers.rollout.base import BaseRollout
@@ -72,7 +72,9 @@ from verl.workers.rollout.vllm_rollout.utils import (
     VLLM_OFT_NAME,
     VLLM_OFT_PATH,
     get_vllm_max_oft_block_size,
+    get_vllm_min_oft_block_size,
 )
+from peft import PeftType
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -132,7 +134,8 @@ class vLLMAsyncRollout(BaseRollout):
             else {}
         )
         self.oft_config = (
-            {"max_ofts": 1, "max_oft_block_size": get_vllm_max_oft_block_size(self.model_config.oft_block_size)}
+            {"max_ofts": 1, "max_oft_block_size": get_vllm_max_oft_block_size(self.model_config.oft_block_size),
+            "min_oft_block_size": get_vllm_min_oft_block_size(self.model_config.oft_block_size)}
             if self.model_config.oft_block_size > 0
             else {}
         )
@@ -199,13 +202,9 @@ class vLLMAsyncRollout(BaseRollout):
         if self.lora_config:
             lora_dtype = getattr(torch, self.config.dtype)
             self.vllm_config.lora_config = LoRAConfig(lora_dtype=lora_dtype, **self.lora_config)
-            print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
-            print(f"vllm_config.lora_config: {self.vllm_config.lora_config}")
-            print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
-            exit()
-        # if self.oft_config:
-        #     oft_dtype = getattr(torch, self.config.dtype)
-        #     self.vllm_config.oft_config = OFTConfig(oft_dtype=oft_dtype, **self.oft_config)
+        if self.oft_config:
+            oft_dtype = getattr(torch, self.config.dtype)
+            self.vllm_config.oft_config = OFTConfig(oft_dtype=oft_dtype, **self.oft_config)
         if self.config.quantization is not None:
             _SUPPORTED_QUANTIZATION = ["fp8", "torchao"]
             if self.config.quantization not in _SUPPORTED_QUANTIZATION:
@@ -258,17 +257,26 @@ class vLLMAsyncRollout(BaseRollout):
             # In async mode, make sure the old lora / oft is removed before adding the new one
             if peft_config.peft_type == PeftType.LORA:
                 self.inference_engine.worker.remove_lora(VLLM_LORA_INT_ID)
+                weights = dict(weights)
+                lora_request = TensorLoRARequest(
+                    lora_name=VLLM_LORA_NAME,
+                    lora_int_id=VLLM_LORA_INT_ID,
+                    lora_path=VLLM_LORA_PATH,
+                    peft_config=asdict(peft_config),
+                    lora_tensors=weights,
+                )
+                self.inference_engine.worker.add_lora(lora_request)
             elif peft_config.peft_type == PeftType.OFT:
                 self.inference_engine.worker.remove_oft(VLLM_OFT_INT_ID)
-            weights = dict(weights)
-            lora_request = TensorLoRARequest(
-                lora_name=VLLM_LORA_NAME,
-                lora_int_id=VLLM_LORA_INT_ID,
-                lora_path=VLLM_LORA_PATH,
-                peft_config=asdict(peft_config),
-                lora_tensors=weights,
-            )
-            self.inference_engine.worker.add_lora(lora_request)
+                weights = dict(weights)
+                oft_request = TensorOFTRequest(
+                    oft_name=VLLM_OFT_NAME,
+                    oft_int_id=VLLM_OFT_INT_ID,
+                    oft_path=VLLM_OFT_PATH,
+                    peft_config=asdict(peft_config),
+                    oft_tensors=weights,
+                )
+                self.inference_engine.worker.add_oft(oft_request)
             logger.info(f"vLLM load weights, loaded_params: {len(weights)}")
         else:
             from verl.utils.vllm.patch import patch_vllm_moe_model_weight_loader
