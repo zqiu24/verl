@@ -29,8 +29,8 @@ class SingleTurnAgentLoop(AgentLoopBase):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.prompt_length = self.config.actor_rollout_ref.rollout.prompt_length
-        self.response_length = self.config.actor_rollout_ref.rollout.response_length
+        self.prompt_length = self.rollout_config.prompt_length
+        self.response_length = self.rollout_config.response_length
 
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
         messages = list(kwargs["raw_prompt"])
@@ -57,6 +57,8 @@ class SingleTurnAgentLoop(AgentLoopBase):
                 image_data=images,
                 video_data=videos,
             )
+        if metrics.get("num_preempted") is None:
+            metrics["num_preempted"] = output.num_preempted if output.num_preempted is not None else -1
         response_mask = [1] * len(output.token_ids)
 
         output = AgentLoopOutput(
@@ -73,4 +75,8 @@ class SingleTurnAgentLoop(AgentLoopBase):
             num_turns=2,
             metrics=metrics,
         )
+
+        # keeping the schema consistent with tool_agent_loop
+        output.extra_fields.update({"turn_scores": [], "tool_rewards": []})
+
         return output

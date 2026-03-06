@@ -1,7 +1,7 @@
 Ascend Quickstart
 ===================================
 
-Last updated: 12/11/2025.
+Last updated: 2/13/2026.
 
 我们在 verl 上增加对华为昇腾设备的支持。
 
@@ -11,6 +11,7 @@ Last updated: 12/11/2025.
 
 2025/12/11：verl 存量场景目前支持自动识别 NPU 设备类型， GPU 脚本在昇腾上运行，原则上不再需要显式设置 trainer.device=npu 参数，新增特性通过设置 trainer.device 仍可优先使用，逐步适配自动识别能力。
 
+    [说明] 自动识别 NPU 设备类型的前提，是运行程序所在环境包含 torch_npu 软件包。如不包含该软件包，仍需显式指定 trainer.device=npu 参数。
 
 硬件支持
 -----------------------------------
@@ -26,11 +27,11 @@ Atlas 800T A3
 -----------------------------------
 
 
-DockerFile镜像构建 & 使用
+DockerFile镜像构建 & 获取 & 使用 
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-如需要通过 DockerFile 构建镜像，或希望使用基于 verl 构建的镜像，请参考 `文档 <https://github.com/volcengine/verl/tree/main/docs/ascend_tutorial/dockerfile_build_guidance.rst>`_ 。
-
+如需要通过 DockerFile 构建镜像，或希望使用基于 verl 构建的镜像，请参考 `文档 <https://github.com/volcengine/verl/tree/main/docs/ascend_tutorial/dockerfile_build_guidance.rst>`_ 
+如果想直接获取镜像，请前往`quay.io/ascend/verl <https://quay.io/repository/ascend/verl?tab=tags&tag=latest>`_ 进行获取，镜像中已包含基础环境和依赖软件包。
 
 安装基础环境
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -66,19 +67,20 @@ DockerFile镜像构建 & 使用
     +---------------+----------------------+
     | triton-ascend | == 3.2.0rc4          |
     +---------------+----------------------+
-    | transformers  | latest release       |
+    | transformers  | == 4.57.6            |
     +---------------+----------------------+
-
+    
+    tips: verl is not support transformers 5.0.0 or higher
     安装指令：
-
+    
     .. code-block:: bash
-
+    
         # 安装torchvision，版本需要和torch匹配
         pip install torchvision==0.22.1
-
+    
         # 清理环境上可能存在的历史triton/triton-ascend软件包残留
         pip uninstall -y triton triton-ascend
-
+    
         # 安装triton-ascend，不需要单独安装triton
         pip install triton-ascend==3.2.0rc4
 
@@ -114,30 +116,30 @@ DockerFile镜像构建 & 使用
 MindSpeed 源码安装指令：
 
     .. code-block:: bash
-
+    
         # 下载 MindSpeed，切换到指定commit-id，并下载 Megatron-LM
         git clone https://gitcode.com/Ascend/MindSpeed.git
         cd MindSpeed && git checkout f2b0977e && cd ..
         git clone --depth 1 --branch core_v0.12.1 https://github.com/NVIDIA/Megatron-LM.git
-
+    
         # 安装 MindSpeed & Megatron
         pip install -e MindSpeed
-
+    
         # 将 Megatron-LM 源码路径配置到 PYTHONPATH 环境变量中
         export PYTHONPATH=$PYTHONPATH:"$(pwd)/Megatron-LM"
-
+    
         # （可选）如希望 shell 关闭，或系统重启后，PYTHONPATH 环境变量仍然生效，建议将它添加到 .bashrc 配置文件中
         echo "export PYTHONPATH=$PYTHONPATH:\"$(pwd)/Megatron-LM\"" >> ~/.bashrc
-
+    
         # 安装 mbridge
         pip install mbridge
 
 MindSpeed 对应 Megatron-LM 后端使用场景，使用方式如下：
 
     1. 使能 verl worker 模型 ``strategy`` 配置为 ``megatron`` ，例如 ``actor_rollout_ref.actor.strategy=megatron``。
-
+    
     2. MindSpeed 自定义入参可通过 ``override_transformer_config`` 参数传入，例如对 actor 模型开启 FA 特性可使用 ``+actor_rollout_ref.actor.megatron.override_transformer_config.use_flash_attn=True``。
-
+    
     3. 更多特性信息可参考 `MindSpeed & verl 文档 <https://gitcode.com/Ascend/MindSpeed/blob/master/docs/user-guide/verl.md>`_ 。
 
 
@@ -162,7 +164,7 @@ verl 中昇腾暂不支持生态库如下：
     +---------------+----------------+
     | liger-kernel  | not supported  |
     +---------------+----------------+
-
+    
     1. 不支持通过 flash_attn 使能 flash attention 加速，支持通过 transformers 使用。
     2. 不支持 liger-kernel 使能。
 
@@ -174,17 +176,17 @@ verl 中昇腾暂不支持生态库如下：
 1.下载数据集并将数据集预处理为parquet格式，以便包含计算RL奖励所需的必要字段
 
     .. code-block:: bash
-
+    
         python3 examples/data_preprocess/gsm8k.py --local_save_dir ~/data/gsm8k
 
 2.执行训练
 
     .. code-block:: bash
-
+    
         set -x
-
+    
         export VLLM_ATTENTION_BACKEND=XFORMERS
-
+    
         python3 -m verl.trainer.main_ppo \
             algorithm.adv_estimator=grpo \
             data.train_files=$HOME/data/gsm8k/train.parquet \
@@ -253,23 +255,23 @@ verl 中昇腾暂不支持生态库如下：
     +-----------------------+-------------------------+------------------------------------------------------------------+-------------------+-------------------+----------------------------------------------------------------------------------------------------------------------------------------------+--------------------------+
     |   GRPO                | Qwen3-32B               |`32B <https://huggingface.co/Qwen/Qwen3-32B>`_                    |        FSDP       |    vllm-ascend    |`qwen3-32B_npu <https://github.com/volcengine/verl/blob/main/examples/grpo_trainer/run_qwen3-32b_npu.sh>`_                                    |    Atlas 200T A2 Box16   |
     +-----------------------+-------------------------+------------------------------------------------------------------+-------------------+-------------------+----------------------------------------------------------------------------------------------------------------------------------------------+--------------------------+
-    |   GRPO                | DeepSeekv3-671B         |`671B <https://huggingface.co/deepseek-ai/DeepSeek-V3>`_          |        Megatron   |    vllm-ascend    |`deepseek_v3_megatron_npu <https://github.com/volcengine/verl/blob/main/recipe/r1_ascend/run_deepseekv3_671b_grpo_megatron_npu.sh>`_          |    Atlas 200T A2 Box16   |
+    |   GRPO                | DeepSeekv3-671B         |`671B <https://huggingface.co/deepseek-ai/DeepSeek-V3>`_          |        Megatron   |    vllm-ascend    |`deepseek_v3_megatron_npu <https://github.com/verl-project/verl-recipe/blob/main//r1_ascend/run_deepseekv3_671b_grpo_megatron_npu.sh>`_       |    Atlas 200T A2 Box16   |
     +-----------------------+-------------------------+------------------------------------------------------------------+-------------------+-------------------+----------------------------------------------------------------------------------------------------------------------------------------------+--------------------------+
-    |   DAPO                | Qwen2.5-7B-instruct     |`7B <https://huggingface.co/Qwen/Qwen2.5-7B-Instruct>`_           |        FSDP       |    vllm-ascend    |`qwen2.5_7b_npu <https://github.com/volcengine/verl/blob/main/recipe/dapo/run_dapo_qwen2.5_7b_npu.sh>`_                                       |    Atlas 200T A2 Box16   |
+    |   DAPO                | Qwen2.5-7B-instruct     |`7B <https://huggingface.co/Qwen/Qwen2.5-7B-Instruct>`_           |        FSDP       |    vllm-ascend    |`qwen2.5_7b_npu <https://github.com/verl-project/verl-recipe/blob/main//dapo/run_dapo_qwen2.5_7b_npu.sh>`_                                    |    Atlas 200T A2 Box16   |
     +-----------------------+-------------------------+------------------------------------------------------------------+-------------------+-------------------+----------------------------------------------------------------------------------------------------------------------------------------------+--------------------------+
-    |   DAPO                | Qwen2.5-32B             |`32B <https://huggingface.co/Qwen/Qwen2.5-32B>`_                  |        FSDP       |    vllm-ascend    |`qwen2.5_32b_npu <https://github.com/volcengine/verl/blob/main/recipe/dapo/run_dapo_qwen2.5_32b_npu.sh>`_                                     |    Atlas 200T A2 Box16   |
+    |   DAPO                | Qwen2.5-32B             |`32B <https://huggingface.co/Qwen/Qwen2.5-32B>`_                  |        FSDP       |    vllm-ascend    |`qwen2.5_32b_npu <https://github.com/verl-project/verl-recipe/blob/main//dapo/run_dapo_qwen2.5_32b_npu.sh>`_                                  |    Atlas 200T A2 Box16   |
     +-----------------------+-------------------------+------------------------------------------------------------------+-------------------+-------------------+----------------------------------------------------------------------------------------------------------------------------------------------+--------------------------+
-    |   DAPO                | Qwen3-8B-base           |`8B <https://huggingface.co/Qwen/Qwen3-8B>`_                      |        FSDP       |    vllm-ascend    |`qwen3_8b_npu <https://github.com/volcengine/verl/blob/main/recipe/dapo/run_dapo_qwen3_8b_base_npu.sh>`_                                      |    Atlas 200T A2 Box16   |
+    |   DAPO                | Qwen3-8B-base           |`8B <https://huggingface.co/Qwen/Qwen3-8B>`_                      |        FSDP       |    vllm-ascend    |`qwen3_8b_npu <https://github.com/verl-project/verl-recipe/blob/main//dapo/run_dapo_qwen3_8b_base_npu.sh>`_                                   |    Atlas 200T A2 Box16   |
     +-----------------------+-------------------------+------------------------------------------------------------------+-------------------+-------------------+----------------------------------------------------------------------------------------------------------------------------------------------+--------------------------+
-    |   DAPO                | Qwen3-14B-base          |`14B <https://huggingface.co/Qwen/Qwen3-14B>`_                    |        FSDP       |    vllm-ascend    |`qwen3_14b_npu <https://github.com/volcengine/verl/blob/main/recipe/dapo/run_dapo_qwen3_14b_base_npu.sh>`_                                    |    Atlas 200T A2 Box16   |
+    |   DAPO                | Qwen3-14B-base          |`14B <https://huggingface.co/Qwen/Qwen3-14B>`_                    |        FSDP       |    vllm-ascend    |`qwen3_14b_npu <https://github.com/verl-project/verl-recipe/blob/main//dapo/run_dapo_qwen3_14b_base_npu.sh>`_                                 |    Atlas 200T A2 Box16   |
     +-----------------------+-------------------------+------------------------------------------------------------------+-------------------+-------------------+----------------------------------------------------------------------------------------------------------------------------------------------+--------------------------+
-    |   DAPO                | Qwen3-30B-A3B-base      |`30B <https://huggingface.co/Qwen/Qwen3-30B-A3B>`_                |        FSDP       |    vllm-ascend    |`qwen3_30b_fsdp_npu <https://github.com/volcengine/verl/blob/main/recipe/dapo/run_dapo_qwen3_moe_30b_base_fsdp_npu.sh>`_                      |    Atlas 200T A2 Box16   |
+    |   DAPO                | Qwen3-30B-A3B-base      |`30B <https://huggingface.co/Qwen/Qwen3-30B-A3B>`_                |        FSDP       |    vllm-ascend    |`qwen3_30b_fsdp_npu <https://github.com/verl-project/verl-recipe/blob/main//dapo/run_dapo_qwen3_moe_30b_base_fsdp_npu.sh>`_                   |    Atlas 200T A2 Box16   |
     +-----------------------+-------------------------+------------------------------------------------------------------+-------------------+-------------------+----------------------------------------------------------------------------------------------------------------------------------------------+--------------------------+
-    |   DAPO                | Qwen3-30B-A3B-base      |`30B <https://huggingface.co/Qwen/Qwen3-30B-A3B>`_                |        Megatron   |    vllm-ascend    |`qwen3_30b_megatron_npu <https://github.com/volcengine/verl/blob/main/recipe/dapo/run_dapo_qwen3_moe_30b_megatron_npu.sh>`_                   |    Atlas 200T A2 Box16   |
+    |   DAPO                | Qwen3-30B-A3B-base      |`30B <https://huggingface.co/Qwen/Qwen3-30B-A3B>`_                |        Megatron   |    vllm-ascend    |`qwen3_30b_megatron_npu <https://github.com/verl-project/verl-recipe/blob/main//dapo/run_dapo_qwen3_moe_30b_megatron_npu.sh>`_                |    Atlas 200T A2 Box16   |
     +-----------------------+-------------------------+------------------------------------------------------------------+-------------------+-------------------+----------------------------------------------------------------------------------------------------------------------------------------------+--------------------------+
     |   PPO                 | Qwen3-8B                |`8B <https://huggingface.co/Qwen/Qwen3-8B>`_                      |        FSDP       |    vllm-ascend    |`qwen3_8b_ppo_npu <https://github.com/volcengine/verl/blob/main/examples/ppo_trainer/run_qwen3-8b_npu.sh>`_                                   |    Atlas 900 A2 PODc     |
     +-----------------------+-------------------------+------------------------------------------------------------------+-------------------+-------------------+----------------------------------------------------------------------------------------------------------------------------------------------+--------------------------+
-    |   One_Step_Off_Policy | Qwen3-8B                |`8B <https://huggingface.co/Qwen/Qwen3-8B>`_                      |        FSDP2      |    vllm-ascend    |`qwen3_8b_fsdp2_npu <https://github.com/volcengine/verl/blob/main/recipe/one_step_off_policy/shell/grpo_qwen3_8b_gsm8k_fsdp2_8_8_npu.sh>`_    |    Atlas 800T A3         |
+    |   One_Step_Off_Policy | Qwen3-8B                |`8B <https://huggingface.co/Qwen/Qwen3-8B>`_                      |        FSDP2      |    vllm-ascend    |`qwen3_8b_fsdp2_npu <https://github.com/verl-project/verl-recipe/blob/main//one_step_off_policy/shell/grpo_qwen3_8b_gsm8k_fsdp2_8_8_npu.sh>`_ |    Atlas 800T A3         |
     +-----------------------+-------------------------+------------------------------------------------------------------+-------------------+-------------------+----------------------------------------------------------------------------------------------------------------------------------------------+--------------------------+
 
 **表2** SFT类算法
