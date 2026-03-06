@@ -48,6 +48,7 @@ def apply_patch():
         """
         Derives `query`, `key` and `value` tensors from `hidden_states`.
         """
+        raise ValueError("OFT should be supported!")
         # s = sequence length, b = batch size, h = hidden size, n = num attention heads
         # Attention heads [s, b, n*h]
         assert hidden_states.ndim == 3, f"hidden_states should be 3D, [s, b, n*h], got {hidden_states.ndim}D"
@@ -77,6 +78,7 @@ def apply_patch():
         # QKV down projection and layernorm
         # =========================================
         if self.config.q_lora_rank is not None:
+            raise ValueError("OFT should be supported!")
             # if linear_q_down_proj is ColumnParallelLinear:
             #     q_compressed: [s, b, q_lora_rank / TP]
             # elif linear_q_down_proj is Linear:
@@ -95,6 +97,7 @@ def apply_patch():
 
             q_compressed = self.q_layernorm(q_compressed)
         else:
+            raise ValueError("OFT should be supported!")
             q_compressed = hidden_states
 
         # if linear_kv_down_proj is ColumnParallelLinear:

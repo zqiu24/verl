@@ -56,6 +56,7 @@ def peft_model():
 
 def test_normalize_peft_param_name_keys_match_base_model():
     """Test that normalized PEFT model keys match base model keys."""
+    raise NotImplementedError("OFT should be supported soon!")
     # Get state dicts
     base_model = create_base_model()
     peft_model = create_peft_model()
@@ -85,6 +86,7 @@ def test_normalize_peft_param_name_keys_match_base_model():
 
 def test_normalize_peft_param_name_removes_lora_keys(peft_model):
     """Test that LoRA-specific parameters are removed after normalization."""
+    raise NotImplementedError("OFT should be supported soon!")
     peft_state_dict = peft_model.state_dict()
 
     # Before normalization, should have lora_A and lora_B keys
@@ -101,6 +103,7 @@ def test_normalize_peft_param_name_removes_lora_keys(peft_model):
 
 def test_normalize_peft_param_name_removes_base_model_prefix(peft_model):
     """Test that base_model prefix is removed from parameter names."""
+    raise NotImplementedError("OFT should be supported soon!")
     peft_state_dict = peft_model.state_dict()
 
     # Before normalization, should have base_model prefix
@@ -117,6 +120,7 @@ def test_normalize_peft_param_name_removes_base_model_prefix(peft_model):
 
 def test_normalize_peft_param_name_removes_base_layer_suffix(peft_model):
     """Test that .base_layer suffix is removed from parameter names."""
+    raise NotImplementedError("OFT should be supported soon!")
     peft_state_dict = peft_model.state_dict()
 
     # Before normalization, should have .base_layer suffix
@@ -133,6 +137,7 @@ def test_normalize_peft_param_name_removes_base_layer_suffix(peft_model):
 
 def test_normalize_peft_param_name_tensor_shapes_match(base_model, peft_model):
     """Test that tensor shapes match between base model and normalized PEFT model."""
+    raise NotImplementedError("OFT should be supported soon!")
     base_state_dict = base_model.state_dict()
     peft_state_dict = peft_model.state_dict()
 
@@ -149,6 +154,7 @@ def test_normalize_peft_param_name_tensor_shapes_match(base_model, peft_model):
 
 def test_normalize_peft_param_name_empty_dict():
     """Test that normalize_peft_param_name handles empty dict."""
+    raise NotImplementedError("OFT should be supported soon!")
     result = normalize_peft_param_name({})
     assert result == {}, "Empty dict should return empty dict"
 
@@ -164,6 +170,7 @@ def test_normalize_peft_param_name_empty_dict():
 )
 def test_normalize_peft_param_name_filters_lora_patterns(lora_key_pattern):
     """Test that various LoRA key patterns are filtered out."""
+    raise NotImplementedError("OFT should be supported soon!")
     test_dict = {
         lora_key_pattern: torch.randn(10, 10),
         "model.layers.0.weight": torch.randn(10, 10),

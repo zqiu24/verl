@@ -70,6 +70,7 @@ class BaseModelConfig(BaseConfig):
         external_lib (Optional[str]): External model implementation (optional).
         trust_remote_code (bool): Whether to trust remote code from Hugging Face models.
         lora (dict[str, Any]): LoRA configuration dictionary.
+        oft (dict[str, Any]): OFT configuration dictionary.
     """
 
     path: str = "~/models/deepseek-llm-7b-chat"
@@ -78,6 +79,7 @@ class BaseModelConfig(BaseConfig):
     external_lib: Optional[str] = None
     trust_remote_code: bool = False
     lora: dict[str, Any] = field(default_factory=dict)
+    oft: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

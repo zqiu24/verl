@@ -85,6 +85,7 @@ class SFTTrainer:
         max_ckpt_to_keep = getattr(self.config.trainer, "max_ckpt_to_keep", None)
         default_hdfs_dir = getattr(self.config.trainer, "default_hdfs_dir", None)
         lora_train_meta = self._get_lora_train_meta()
+        oft_train_meta = self._get_oft_train_meta()
 
         self.ckpt_handler = CheckpointHandler(
             engine=self.engine,
@@ -95,6 +96,7 @@ class SFTTrainer:
             resume_mode=resume_mode,
             resume_from_path=resume_from_path,
             lora_train_meta=lora_train_meta,
+            oft_train_meta=oft_train_meta,
         )
 
     def _get_lora_train_meta(self):
@@ -132,6 +134,22 @@ class SFTTrainer:
         return {
             "r": lora_rank,
             "lora_alpha": int(lora_alpha or 0),
+            "task_type": str(task_type),
+        }
+
+    def _get_oft_train_meta(self):
+        oft_adapter_path = self.config.model.get("oft_adapter_path", None)
+        oft_block_size = int(getattr(self.config.model, "oft_block_size", 0) or 0)
+
+        if oft_adapter_path is None and oft_block_size <= 0:
+            return None
+
+        task_type = self.config.model.get("task_type", None)
+        if task_type is None:
+            task_type = "CAUSAL_LM"
+
+        return {
+            "oft_block_size": oft_block_size,
             "task_type": str(task_type),
         }
 

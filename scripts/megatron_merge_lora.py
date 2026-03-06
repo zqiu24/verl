@@ -54,7 +54,10 @@ class CustomSaveWorker(ActorRolloutRefWorker):
 
 @hydra.main(config_path="../verl/trainer/config", config_name="ppo_megatron_trainer", version_base=None)
 def main(config):
-    assert config.actor_rollout_ref.model.lora.adapter_path is not None, "adapter_path must be specified"
+    lora_adapter_path = config.actor_rollout_ref.model.lora.get("adapter_path")
+    oft_adapter_path = config.actor_rollout_ref.model.get("oft", {}).get("adapter_path")
+    assert lora_adapter_path is not None or oft_adapter_path is not None, \
+        "Either model.lora.adapter_path or model.oft.adapter_path must be specified"
 
     if (
         config.actor_rollout_ref.actor.optim.lr_decay_steps is None
@@ -110,5 +113,6 @@ if __name__ == "__main__":
         `python3 -m verl.trainer.main_ppo --config-name=ppo_megatron_trainer ...`
     Now replace it with 
         `python3 ./scripts/megatron_merge_lora.py --config-name=ppo_megatron_trainer ...`
+        `python3 ./scripts/megatron_merge_oft.py --config-name=ppo_megatron_trainer ...`
     """
     main()

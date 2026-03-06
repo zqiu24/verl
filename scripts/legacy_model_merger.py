@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 import numpy as np
+import math
 import torch
 from accelerate import init_empty_weights
 from safetensors.torch import load_file
@@ -211,6 +212,62 @@ class BaseModelMerger(ABC):
 
         return lora_path
 
+    def save_oft_adapter(self, state_dict: dict[str, torch.Tensor]):
+        """
+        Save oft adapter to safetensors.
+
+        Returns:
+            oft_path: str, the path to the oft adapter. None if no oft adapter found.
+
+        Note:
+            This function change the 'state_dict' in place.
+        """
+        oft_params_names = [name for name in state_dict.keys() if "oft_" in name]
+
+        if len(oft_params_names) == 0:
+            return None
+
+        import json
+        from typing import OrderedDict
+
+        import peft
+        from safetensors.torch import save_file
+
+        oft_params = OrderedDict()
+        target_modules = set()
+        oft_key = None
+
+        for name in oft_params_names:
+            oft_key = name.replace(".default.weight", ".weight")
+            target_modules.add(oft_key.split(".")[-3])
+            oft_params[oft_key] = state_dict.pop(name)
+
+        oft_block_size = int((1 + math.sqrt(1 + 8 * oft_params[oft_key].shape[1])) / 2)
+        peft_dict = {
+            "oft_block_size": oft_block_size,
+            "target_modules": list(target_modules),
+        }
+        peft_config = peft.OFTConfig(**peft_dict).to_dict()
+        peft_config["task_type"] = peft_config["task_type"].value if peft_config["task_type"] else None
+        peft_config["peft_type"] = peft_config["peft_type"].value if peft_config["peft_type"] else None
+        peft_config["target_modules"] = list(peft_config["target_modules"])
+
+        oft_path = os.path.join(self.config.target_dir, "oft_adapter")
+        os.makedirs(oft_path, exist_ok=True)
+        with open(os.path.join(oft_path, "adapter_config.json"), "w", encoding="utf-8") as f:
+            json.dump(peft_config, f, ensure_ascii=False, indent=4)
+        save_file(oft_params, os.path.join(oft_path, "adapter_model.safetensors"))
+
+        for name in list(state_dict.keys()):
+            key = (
+                name.replace("base_model.model.", "")
+                .replace(".base_layer.weight", ".weight")
+                .replace(".base_layer.bias", ".bias")
+            )
+            state_dict[key] = state_dict.pop(name)
+
+        return oft_path
+
     def save_hf_model_and_tokenizer(self, state_dict: dict[str, torch.Tensor]):
         auto_model_class = self.get_transformers_auto_model_class()
         with init_empty_weights():
@@ -221,6 +278,10 @@ class BaseModelMerger(ABC):
         lora_path = self.save_lora_adapter(state_dict)
         if lora_path:
             print(f"Saving lora adapter to {lora_path}")
+
+        oft_path = self.save_oft_adapter(state_dict)
+        if oft_path:
+            print(f"Saving oft adapter to {oft_path}")
 
         print(f"Saving model to {self.config.target_dir}")
         model.save_pretrained(self.config.target_dir, state_dict=state_dict)

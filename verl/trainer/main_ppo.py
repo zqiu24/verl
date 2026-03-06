@@ -59,7 +59,7 @@ def run_ppo(config, task_runner_class=None) -> None:
     if not ray.is_initialized():
         # Initialize Ray with a local cluster configuration
         # Set environment variables in the runtime environment to control tokenizer parallelism,
-        # NCCL debug level, VLLM logging level, and allow runtime LoRA updating
+        # NCCL debug level, VLLM logging level, and allow runtime LoRA/OFT updating
         # `num_cpus` specifies the number of CPU cores Ray can use, obtained from the configuration
         default_runtime_env = get_ppo_ray_runtime_env()
         ray_init_kwargs = config.ray_kwargs.get("ray_init", {})
@@ -137,7 +137,17 @@ class TaskRunner:
             lora_rank = config.actor_rollout_ref.model.get("lora", {}).get("rank", 0)
             if lora_rank <= 0:
                 lora_rank = config.actor_rollout_ref.model.get("lora_rank", 0)
-            ref_in_actor = lora_rank > 0 or config.actor_rollout_ref.model.get("lora_adapter_path") is not None
+
+            oft_block_size = config.actor_rollout_ref.model.get("oft", {}).get("block_size", 0)
+            if oft_block_size <= 0:
+                oft_block_size = config.actor_rollout_ref.model.get("oft_block_size", 0)
+
+            ref_in_actor = (
+                lora_rank > 0
+                or config.actor_rollout_ref.model.get("lora_adapter_path") is not None
+                or oft_block_size > 0
+                or config.actor_rollout_ref.model.get("oft_adapter_path") is not None
+            )
             # NOTE: In new model engine, ref policy and actor rollout are in same ActorRolloutRefWorker,
             # while in legacy model engine, ref policy is in a separate ActorRolloutRefWorker.
             if need_reference_policy(config) and not ref_in_actor:

@@ -18,7 +18,7 @@ import pytest
 import torch
 import torch.distributed
 import torch.multiprocessing as mp
-from peft import LoraConfig, get_peft_model
+from peft import OFTConfig, get_peft_model
 from torch.distributed import init_device_mesh
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import MixedPrecision, ShardingStrategy
@@ -29,14 +29,14 @@ from verl.utils.fsdp_utils import (
     MixedPrecisionPolicy,
     apply_fsdp2,
     get_fsdp_wrap_policy,
-    merged_lora_context,
+    merged_oft_context,
 )
 
 
-def _test_merged_lora_context_worker(
-    rank, world_size, rendezvous_file, strategy, model_config, lora_config_dict, backup_adapters
+def _test_merged_oft_context_worker(
+    rank, world_size, rendezvous_file, strategy, model_config, oft_config_dict, backup_adapters
 ):
-    """Worker function for testing merged_lora_context with FSDP.
+    """Worker function for testing merged_oft_context with FSDP.
 
     Args:
         rank: Process rank
@@ -44,10 +44,9 @@ def _test_merged_lora_context_worker(
         rendezvous_file: Path to rendezvous file for distributed init
         strategy: FSDP strategy ("fsdp" or "fsdp2")
         model_config: Model configuration object (Qwen2Config, GptOssConfig, etc.)
-        lora_config_dict: Dictionary of LoRA configuration parameters
+        oft_config_dict: Dictionary of OFT configuration parameters
         backup_adapters: Whether to backup adapter weights before merging
     """
-    raise NotImplementedError("OFT should be supported soon!")
     get_torch_device().set_device(rank)
     torch.distributed.init_process_group(
         backend=get_nccl_backend(),
@@ -65,11 +64,11 @@ def _test_merged_lora_context_worker(
         model = model.to(device=get_device_name())
 
     # Add LoRA with provided config
-    lora_config = LoraConfig(**lora_config_dict)
-    model = get_peft_model(model, lora_config)
+    oft_config = LoraConfig(**oft_config_dict)
+    model = get_peft_model(model, oft_config)
 
     # Initialize LoRA adapter weights to non-zero values for testing
-    from peft.tuners.lora import LoraLayer
+    from peft.tuners.oft import LoraLayer
 
     with torch.no_grad():
         for name, module in model.named_modules():
@@ -159,9 +158,8 @@ def _test_merged_lora_context_worker(
 @pytest.mark.parametrize("world_size", (2,))
 @pytest.mark.parametrize("strategy", ("fsdp", "fsdp2"))
 @pytest.mark.parametrize("backup_adapters", (True, False))
-def test_merged_lora_context_qwen2(world_size, strategy, backup_adapters, tmp_path):
-    """Test merged_lora_context with FSDP on Qwen2 model."""
-    raise NotImplementedError("OFT should be supported soon!")
+def test_merged_oft_context_qwen2(world_size, strategy, backup_adapters, tmp_path):
+    """Test merged_oft_context with FSDP on Qwen2 model."""
     rendezvous_file = str(tmp_path / f"rdzv_file_qwen2_{backup_adapters}")
     os.makedirs(os.path.dirname(rendezvous_file), exist_ok=True)
 
@@ -169,7 +167,7 @@ def test_merged_lora_context_qwen2(world_size, strategy, backup_adapters, tmp_pa
     model_config = Qwen2Config(num_hidden_layers=2, num_attention_heads=2, hidden_size=128)
 
     # Create LoRA config for Qwen2
-    lora_config_dict = {
+    oft_config_dict = {
         "r": 8,
         "lora_alpha": 16,
         "target_modules": ["q_proj", "v_proj"],

@@ -108,7 +108,17 @@ class OneStepOffRayTrainer(SeparateRayPPOTrainer):
         lora_rank = config.actor_rollout_ref.model.get("lora", {}).get("rank", 0)
         if lora_rank <= 0:
             lora_rank = config.actor_rollout_ref.model.get("lora_rank", 0)
-        self.ref_in_actor = lora_rank > 0 or config.actor_rollout_ref.model.get("lora_adapter_path") is not None
+
+        oft_block_size = config.actor_rollout_ref.model.get("oft", {}).get("oft_block_size", 0)
+        if oft_block_size <= 0:
+            oft_block_size = config.actor_rollout_ref.model.get("oft_block_size", 0)
+
+        self.ref_in_actor = (
+            lora_rank > 0
+            or config.actor_rollout_ref.model.get("lora_adapter_path") is not None
+            or oft_block_size > 0
+            or config.actor_rollout_ref.model.get("oft_adapter_path") is not None
+        )
 
         # define in-reward KL control
         # kl loss control currently not suppoorted

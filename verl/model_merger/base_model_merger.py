@@ -18,7 +18,7 @@ import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
-
+import math
 import torch
 from accelerate import init_empty_weights
 from transformers import (
@@ -278,6 +278,41 @@ class BaseModelMerger(ABC):
 
         return result if len(result) > 0 else None
 
+    def _load_oft_train_meta(self) -> Optional[dict[str, object]]:
+        if not self.config.local_dir:
+            return None
+
+        meta_path = os.path.join(self.config.local_dir, "oft_train_meta.json")
+        if not os.path.exists(meta_path):
+            return None
+
+        import json
+
+        try:
+            with open(meta_path, encoding="utf-8") as f:
+                oft_meta = json.load(f)
+        except Exception as e:
+            warnings.warn(f"Failed to read OFT metadata from {meta_path}: {e}", stacklevel=2)
+            return None
+
+        result = {}
+        if "oft_block_size" in oft_meta:
+            try:
+                result["oft_block_size"] = int(oft_meta["oft_block_size"])
+            except (TypeError, ValueError):
+                warnings.warn(f"Invalid OFT block size in {meta_path}: {oft_meta['oft_block_size']}", stacklevel=2)
+
+        if "task_type" in oft_meta:
+            task_type = oft_meta["task_type"]
+            if task_type is None:
+                pass
+            elif isinstance(task_type, str):
+                result["task_type"] = task_type
+            else:
+                warnings.warn(f"Invalid task_type in {meta_path}: {task_type}", stacklevel=2)
+
+        return result if len(result) > 0 else None
+
     def save_lora_adapter(self, state_dict: dict[str, torch.Tensor]):
         """
         Save lora adapter to safetensors.
@@ -369,6 +404,84 @@ class BaseModelMerger(ABC):
 
         return lora_path
 
+    def save_oft_adapter(self, state_dict: dict[str, torch.Tensor]):
+        """
+        Save oft adapter to safetensors.
+
+        Returns:
+            oft_path: str, the path to the oft adapter. None if no oft adapter found.
+
+        Note:
+            This function change the 'state_dict' in place.
+        """
+        oft_params_names = [name for name in state_dict.keys() if "oft_" in name]
+
+        if len(oft_params_names) == 0:
+            return None
+
+        import json
+        from typing import OrderedDict
+
+        import peft
+        from safetensors.torch import save_file
+
+        oft_params = OrderedDict()
+        target_modules = set()
+        oft_key = None
+
+        for name in oft_params_names:
+            oft_key = name.replace(".default.weight", ".weight")
+            target_modules.add(oft_key.split(".")[-3])
+            oft_params[oft_key] = state_dict.pop(name)
+
+        inferred_oft_block_size = int((1 + math.sqrt(1 + 8 * oft_params[oft_key].shape[1])) / 2)
+        oft_meta = self._load_oft_train_meta()
+
+        oft_block_size = inferred_oft_block_size
+        task_type = None
+
+        if oft_meta is not None:
+            meta_block_size = oft_meta.get("oft_block_size")
+            if meta_block_size is not None and meta_block_size > 0:
+                if meta_block_size != inferred_oft_block_size:
+                    warnings.warn(
+                        f"OFT block size mismatch between metadata ({meta_block_size}) and adapter weights "
+                        f"({inferred_oft_block_size}); using metadata block size.",
+                        stacklevel=2,
+                    )
+                oft_block_size = meta_block_size
+
+            meta_task_type = oft_meta.get("task_type")
+            if meta_task_type is not None:
+                task_type = meta_task_type
+
+        peft_dict = {
+            "oft_block_size": oft_block_size,
+            "target_modules": list(target_modules),
+        }
+        if task_type is not None:
+            peft_dict["task_type"] = task_type
+        peft_config = peft.OFTConfig(**peft_dict).to_dict()
+        peft_config["task_type"] = peft_config["task_type"].value if peft_config["task_type"] else None
+        peft_config["peft_type"] = peft_config["peft_type"].value if peft_config["peft_type"] else None
+        peft_config["target_modules"] = list(peft_config["target_modules"])
+
+        oft_path = os.path.join(self.config.target_dir, "oft_adapter")
+        os.makedirs(oft_path, exist_ok=True)
+        with open(os.path.join(oft_path, "adapter_config.json"), "w", encoding="utf-8") as f:
+            json.dump(peft_config, f, ensure_ascii=False, indent=4)
+        save_file(oft_params, os.path.join(oft_path, "adapter_model.safetensors"))
+
+        for name in list(state_dict.keys()):
+            key = (
+                name.replace("base_model.model.", "")
+                .replace(".base_layer.weight", ".weight")
+                .replace(".base_layer.bias", ".bias")
+            )
+            state_dict[key] = state_dict.pop(name)
+
+        return oft_path
+
     def save_hf_model_and_tokenizer(self, state_dict: dict[str, torch.Tensor]):
         auto_model_class = self.get_transformers_auto_model_class()
         with init_empty_weights():
@@ -381,6 +494,10 @@ class BaseModelMerger(ABC):
         lora_path = self.save_lora_adapter(state_dict)
         if lora_path:
             print(f"Saving lora adapter to {lora_path}")
+
+        oft_path = self.save_oft_adapter(state_dict)
+        if oft_path:
+            print(f"Saving oft adapter to {oft_path}")
 
         print(f"Saving model to {self.config.target_dir}")
         model.save_pretrained(self.config.target_dir, state_dict=state_dict)

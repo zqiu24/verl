@@ -363,7 +363,7 @@ class TrainingWorker(Worker, DistProfilerExtension):
         global_token_num = tu.get(data, key="global_token_num")
         compute_loss = tu.get(data, key="compute_loss", default=True)
         disable_auto_offload = tu.get(data, key="disable_auto_offload", default=False)
-        no_lora_adapter = tu.pop(data, key="no_lora_adapter", default=False)
+        no_adapter = tu.pop(data, key="no_adapter", default=False)
         images_seqlens = tu.get(data, key="images_seqlens", default=None)
 
         default_keys = dict(
@@ -385,7 +385,7 @@ class TrainingWorker(Worker, DistProfilerExtension):
             self.engine.eval_mode(disable_auto_offload=disable_auto_offload),
             Timer(name="eval_batch", logger=None) as timer,
         ):
-            adapter_ctx = self.engine.disable_adapter() if no_lora_adapter else nullcontext()
+            adapter_ctx = self.engine.disable_adapter() if no_adapter else nullcontext()
             with adapter_ctx:
                 output = self.engine.infer_batch(data, loss_function=loss_function)
         delta_time = timer.last
@@ -568,10 +568,10 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 config=rollout_config, model_config=model_config, device_mesh=rollout_device_mesh
             )
 
-            # used for LoRA
+            # used for LoRA / OFT
             self.base_sync_done: bool = "dummy" not in self.config.rollout.load_format
             self.layered_summon = self.config.rollout.get("layered_summon", False)
-            self.peft_merge: bool = model_config.lora.get("merge", False)
+            self.peft_merge: bool = model_config.lora.get("merge", False) or model_config.get("oft", {}).get("merge", False)
 
         # 4. build checkpoint engine
         if "actor" in self.role:
@@ -651,18 +651,18 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             per_tensor_param, peft_config=peft_config, base_sync_done=True, global_steps=global_steps
         )
 
-        do_lora_base_sync = False
+        do_peft_base_sync = False
         if not self.peft_merge and peft_config is not None:
-            # set sleep level for LoRA adapter weights only sync
+            # set sleep level for LoRA / OFT adapter weights only sync
             # TODO: make this configurable so that users with small
             # main memory can trade sync time to avoid OOM
             self.rollout.sleep_level = 1
 
-            do_lora_base_sync = (not self.base_sync_done) or (
+            do_peft_base_sync = (not self.base_sync_done) or (
                 self.rollout.sleep_level != 1 and self.config.rollout.free_cache_engine
             )
 
-        if do_lora_base_sync:
+        if do_peft_base_sync:
             per_tensor_base_params, _ = self.actor.engine.get_per_tensor_param(
                 layered_summon=self.layered_summon, base_sync_done=False
             )

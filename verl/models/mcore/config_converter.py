@@ -117,6 +117,8 @@ def _get_mla_transformer_config(
         # MLA specific parameters
         "q_lora_rank": hf_config.q_lora_rank,
         "kv_lora_rank": hf_config.kv_lora_rank,
+        "q_oft_block_size": hf_config.q_oft_block_size,
+        "kv_oft_block_size": hf_config.kv_oft_block_size,
         "qk_head_dim": hf_config.qk_nope_head_dim,
         "qk_pos_emb_head_dim": hf_config.qk_rope_head_dim,
         "v_head_dim": hf_config.v_head_dim,

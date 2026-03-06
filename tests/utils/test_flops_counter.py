@@ -123,11 +123,13 @@ CONFIG = {
             "num_experts_per_tok": 8,
             "n_shared_experts": 1,
             "kv_lora_rank": 512,
+            "kv_oft_block_size": 128,
             "qk_rope_head_dim": 64,
             "v_head_dim": 128,
             "intermediate_size": 18432,
             "qk_nope_head_dim": 128,
             "q_lora_rank": 1536,
+            "q_oft_block_size": 192,
         },
         "batch_seqlens_tuple": ([512, 1024, 2048], [4096, 4096, 4096]),
         # (1536*7168+128*192*1536+7168*(512+64)+128*(128+128)*512+128*128*7168) = 187105280

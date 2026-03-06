@@ -43,6 +43,7 @@ def _test_normalize_peft_with_fsdp_worker(rank, world_size, rendezvous_file, str
         rendezvous_file: Path to rendezvous file for distributed init
         strategy: FSDP strategy ("fsdp" or "fsdp2")
     """
+    raise NotImplementedError("OFT should be supported soon!")
     get_torch_device().set_device(rank)
     torch.distributed.init_process_group(
         backend=get_nccl_backend(),
@@ -203,6 +204,7 @@ def test_normalize_peft_param_name_with_fsdp(world_size, strategy, tmp_path):
     This test verifies that after applying FSDP to both base and PEFT models,
     the normalized PEFT model keys match the FSDP base model keys.
     """
+    raise NotImplementedError("OFT should be supported soon!")
     rendezvous_file = str(tmp_path / f"rdzv_file_normalize_{strategy}")
     os.makedirs(os.path.dirname(rendezvous_file), exist_ok=True)
 

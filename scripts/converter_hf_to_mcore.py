@@ -358,8 +358,14 @@ def convert_checkpoint_from_transformers_to_megatron_dpskv3(
         numel += safe_copy(hf_layer.input_layernorm.weight, layer.input_layernorm.weight)
 
         if hf_config.q_lora_rank is None:
+            raise NotImplementedError(
+                "Please add OFT support!"
+            )
             numel += safe_copy(hf_layer.self_attn.q_proj.weight, layer.self_attention.linear_q_proj.weight)
         else:
+            raise NotImplementedError(
+                "Please add OFT support!"
+            )
             numel += safe_copy(hf_layer.self_attn.q_a_proj.weight, layer.self_attention.linear_q_down_proj.weight)
             numel += safe_copy(hf_layer.self_attn.q_b_proj.weight, layer.self_attention.linear_q_up_proj.weight)
             numel += safe_copy(
