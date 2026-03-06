@@ -21,6 +21,7 @@ from pprint import pprint
 from typing import Any, Callable, Optional
 
 import numpy as np
+from peft.tuners import oft
 import ray
 import vllm.entrypoints.cli.serve
 from packaging import version
@@ -194,6 +195,12 @@ class vLLMHttpServer:
         return (
             self.model_config.lora_rank > 0 or self.model_config.lora.get("rank", 0) > 0
         ) and not self.model_config.lora.get("merge", False)
+
+    @property
+    def oft_as_adapter(self) -> bool:
+        return (
+            self.model_config.oft_block_size > 0 or self.model_config.oft.get("block_size", 0) > 0
+        ) and not self.model_config.oft.get("merge", False)
 
     async def collective_rpc(
         self,
@@ -409,6 +416,25 @@ class vLLMHttpServer:
             if self.model_config.lora.get("fully_sharded_loras", False):
                 lora_args["fully_sharded_loras"] = True
             args.update(lora_args)
+
+        # update oft-related args
+        oft_block_size = self.model_config.oft.get("oft_block_size", 0)
+        if oft_block_size <= 0:
+            oft_block_size = self.model_config.oft_block_size  # FIXME: fallback to lora_rank for now, we should unify lora settings.
+
+        if self.model_config.oft.get("merge", False):
+            oft_block_size = 0
+
+        if oft_block_size > 0:
+            oft_args = {
+                "enable_oft": True,
+                "max_ofts": 1,
+                "max_oft_block_size": get_vllm_max_oft_block_size(oft_block_size),
+                "min_oft_block_size": get_vllm_min_oft_block_size(oft_block_size),
+            }
+            if self.model_config.oft.get("fully_sharded_ofts", False):
+                oft_args["fully_sharded_ofts"] = True
+            args.update(oft_args)
 
         # update oft-related args
         if getattr(self.model_config, "oft_block_size", 0) > 0:
@@ -655,7 +681,7 @@ class vLLMHttpServer:
         if self.rollout_mode == RolloutMode.HYBRID:
             # Don't use engine.sleep(level=2) here
             # lora only update adapter weights, so set sleep level to 1
-            if self.lora_as_adapter:
+            if self.lora_as_adapter or self.oft_as_adapter:
                 sleep_level = 1
             else:
                 sleep_level = 2

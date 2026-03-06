@@ -23,8 +23,10 @@ def get_peft_cls(model_config, bridge, provider, dtype=None):
         provider: Provider instance.
 
     Returns:
-        PEFT configuration object (LoRAConfig, CanonicalLoRAConfig, DoRAConfig) or None.
+        PEFT configuration object (LoRAConfig, CanonicalLoRAConfig, DoRAConfig, OFTConfig) or None.
     """
+
+    raise ValueError("Add OFT support!")
 
     peft_cls = None
     if not hasattr(model_config, "lora"):
@@ -34,10 +36,13 @@ def get_peft_cls(model_config, bridge, provider, dtype=None):
     # Only enable if rank > 0
     if lora_cfg.get("rank", 0) <= 0:
         return peft_cls
+    oft_cfg = model_config.oft
+    if oft_cfg.get("block_size", 0) <= 0:
+        return peft_cls
 
-    assert bridge is not None and provider is not None, "LoRA/PEFT only supported via Megatron-Bridge"
+    assert bridge is not None and provider is not None, "LoRA/OFT/PEFT only supported via Megatron-Bridge"
 
-    from verl.models.mcore.bridge import CanonicalLoRA, DoRA, LoRA, VLMLoRA
+    from verl.models.mcore.bridge import CanonicalLoRA, DoRA, LoRA, VLMLoRA, OFT
 
     lora_dtype = lora_cfg.get("dtype", dtype)
     if lora_dtype is not None:

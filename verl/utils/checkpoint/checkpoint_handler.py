@@ -65,6 +65,7 @@ class CheckpointHandler:
         resume_from_path=None,
         mode=OrchestrationMode.SPMD,
         lora_train_meta=None,
+        oft_train_meta=None,
     ):
         self.default_local_dir = default_local_dir
         self.max_ckpt_to_keep = max_ckpt_to_keep
@@ -75,7 +76,8 @@ class CheckpointHandler:
         self.train_dataloader = train_dataloader
         self.mode = mode
         self.lora_train_meta = lora_train_meta
-
+        self.oft_train_meta = oft_train_meta
+        
         if self.mode == OrchestrationMode.SPMD:
             self.rank = torch.distributed.get_rank()
             self.is_mp_src_rank_with_outputs = self.engine.is_mp_src_rank_with_outputs()
@@ -112,6 +114,13 @@ class CheckpointHandler:
             with open(lora_meta_path, "w", encoding="utf-8") as f:
                 json.dump(self.lora_train_meta, f, ensure_ascii=False, indent=4)
             print(f"Saved LoRA rank/alpha metadata to: {lora_meta_path}")
+
+        if self.rank == 0 and self.oft_train_meta is not None:
+            local_mkdir_safe(local_global_step_folder)
+            oft_meta_path = os.path.join(local_global_step_folder, "oft_train_meta.json")
+            with open(oft_meta_path, "w", encoding="utf-8") as f:
+                json.dump(self.oft_train_meta, f, ensure_ascii=False, indent=4)
+            print(f"Saved OFT block size metadata to: {oft_meta_path}")
 
         if self.is_mp_src_rank_with_outputs:
             dp_rank = self.dp_rank

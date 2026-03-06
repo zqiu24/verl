@@ -187,7 +187,7 @@ def validate_config(
             "validation gen temperature should be greater than 0 when enabling do_sample"
         )
 
-    # check LoRA rank in vLLM
+    # check LoRA rank / OFT block size in vLLM
     lora_config = config.actor_rollout_ref.model.get("lora", {})
     lora_rank = lora_config.get("rank", 0)
     if lora_rank <= 0:
@@ -198,5 +198,16 @@ def validate_config(
         from verl.workers.rollout.vllm_rollout.utils import get_vllm_max_lora_rank
 
         get_vllm_max_lora_rank(lora_rank)
+
+    oft_config = config.actor_rollout_ref.model.get("oft", {})
+    oft_block_size = oft_config.get("block_size", 0)
+    if oft_block_size <= 0:
+        oft_block_size = config.actor_rollout_ref.model.get("lora_rank", 0)
+    if oft_config.get("merge", False):
+        oft_block_size = 0
+    if oft_block_size > 0 and config.actor_rollout_ref.rollout.name == "vllm":
+        from verl.workers.rollout.vllm_rollout.utils import get_vllm_max_oft_block_size
+
+        get_vllm_max_oft_block_size(oft_block_size)
 
     print("[validate_config] All configuration checks passed successfully!")

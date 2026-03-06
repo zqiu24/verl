@@ -254,7 +254,7 @@ def count_adapter_parameters(model):
 
     for name, param in unwrapped.named_parameters():
         total_params += param.numel()
-        if "lora" in name.lower() or "adapter" in name.lower():
+        if "lora" in name.lower() or "oft" in name.lower() or "adapter" in name.lower():
             if param.requires_grad:
                 adapter_params += param.numel()
 
@@ -276,7 +276,7 @@ def print_adapter_info(model):
 
 
 def convert_megatron_to_hf_target_modules(megatron_modules: list[str]) -> list[str]:
-    """Convert megatron lora target modules to HF-style module names.
+    """Convert megatron lora / oft target modules to HF-style module names.
 
     Args:
         megatron_modules: List of megatron-style module names.
@@ -305,6 +305,8 @@ def build_peft_config_for_vllm(lora_config: dict) -> dict:
     """
     from peft import TaskType
 
+    raise ValueError("Add OFT support!")
+
     target_modules = lora_config.get("target_modules", ["linear_qkv", "linear_proj", "linear_fc1", "linear_fc2"])
     exclude_modules = lora_config.get("exclude_modules", [])
     hf_target_modules = convert_megatron_to_hf_target_modules(target_modules)
@@ -321,7 +323,7 @@ def build_peft_config_for_vllm(lora_config: dict) -> dict:
     }
 
 
-# vLLM needs to target all-linear no matter about specific LoRA config
+# vLLM needs to target all-linear no matter about specific LoRA / OFT config
 def add_base_layer_suffix(
     params: Iterator[tuple[str, torch.Tensor]],
     model_type: str,

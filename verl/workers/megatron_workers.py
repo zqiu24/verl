@@ -346,7 +346,7 @@ class ActorRolloutRefWorker(MegatronWorker, DistProfilerExtension):
         self._is_offload_grad = False
         self._is_offload_optimizer = False
 
-        # Initialize LoRA-related attributes (will be updated in _build_rollout if needed)
+        # Initialize LoRA / OFT-related attributes (will be updated in _build_rollout if needed)
         self.base_sync_done = False
         self.peft_merge = False
 
@@ -416,7 +416,7 @@ class ActorRolloutRefWorker(MegatronWorker, DistProfilerExtension):
                 override_model_config=override_model_config,
                 override_ddp_config=override_ddp_config,
                 peft_cls=self.peft_cls,
-                peft_config=self.config.model.get("lora", None),
+                peft_config=self.config.model.get("lora") or self.config.model.get("oft") or None,
             )
             self.tf_config = updated_tf_config
             print(f"actor_module: {len(actor_module)}")
@@ -541,9 +541,9 @@ class ActorRolloutRefWorker(MegatronWorker, DistProfilerExtension):
         )
         log_gpu_memory_usage(f"After building {self.config.rollout.name} rollout", logger=logger)
 
-        # Initialize base_sync_done for LoRA
+        # Initialize base_sync_done for LoRA / OFT
         self.base_sync_done: bool = "dummy" not in self.config.rollout.load_format
-        self.peft_merge: bool = model_config.lora.get("merge", False)
+        self.peft_merge: bool = model_config.lora.get("merge", False) or model_config.get("oft", {}).get("merge", False)
 
         # 5. switch to trainer mode
         # NOTE: It's critical that hybrid engine in trainer mode initially to load checkpoint.
@@ -686,17 +686,17 @@ class ActorRolloutRefWorker(MegatronWorker, DistProfilerExtension):
             load_megatron_model_to_gpu(self.actor.actor_module, load_grad=False)
             log_gpu_memory_usage("After load actor params during rollout_mode", logger=logger)
 
-        # Build peft_config for vLLM LoRA support
+        # Build peft_config for vLLM LoRA / OFT support
         peft_config = None
-        do_lora_base_sync = False
+        do_peft_base_sync = False
         if not self.peft_merge and self.peft_cls is not None:
-            peft_config = build_peft_config_for_vllm(self.config.model.get("lora", {}))
-            # set sleep level for LoRA adapter weights only sync
+            peft_config = build_peft_config_for_vllm(self.config.model)
+            # set sleep level for LoRA / OFT adapter weights only sync
             # TODO: make this configurable so that users with small
             # main memory can trade sync time to avoid OOM
             self.rollout.sleep_level = 1
 
-            do_lora_base_sync = (not self.base_sync_done) or (
+            do_peft_base_sync = (not self.base_sync_done) or (
                 self.rollout.sleep_level != 1 and self.config.rollout.free_cache_engine
             )
 
@@ -719,13 +719,13 @@ class ActorRolloutRefWorker(MegatronWorker, DistProfilerExtension):
 
         if self.config.rollout.free_cache_engine:
             await self.rollout.resume(tags=["weights"])
-        if do_lora_base_sync:
+        if do_peft_base_sync:
             # Base layer sync
-            per_tensor_param_lora_base = self.bridge.export_hf_weights(
+            per_tensor_param_peft_base = self.bridge.export_hf_weights(
                 self.actor.actor_module, merge_adapter_weights=False
             )
             await self.rollout.update_weights(
-                add_base_layer_suffix(per_tensor_param_lora_base, model_type=self.hf_config.model_type),
+                add_base_layer_suffix(per_tensor_param_peft_base, model_type=self.hf_config.model_type),
                 peft_config=peft_config,
                 base_sync_done=False,
             )
@@ -843,8 +843,8 @@ class ActorRolloutRefWorker(MegatronWorker, DistProfilerExtension):
     @DistProfiler.annotate(color="olive", role="ref_compute_log_prob")
     def compute_ref_log_prob(self, data: DataProto):
         if self.peft_cls is not None:
-            # if is lora, actor without lora applied is the ref
-            data.meta_info["is_lora"] = True
+            # if is lora / oft, actor without lora / oft applied is the ref
+            data.meta_info["is_adapter"] = True
             return self.compute_log_prob(data)
         assert self._is_ref
         if self._ref_is_offload_param:
@@ -872,10 +872,10 @@ class ActorRolloutRefWorker(MegatronWorker, DistProfilerExtension):
         if self._is_offload_param:
             load_megatron_model_to_gpu(self.actor_module, load_grad=False)
             log_gpu_memory_usage("After load actor params and grad during compute_log_prob", logger=logger)
-        is_lora = data.meta_info.pop("is_lora", False)
-        adapter_ctx = self.peft_cls.disable_adapter(self.actor_module) if is_lora else nullcontext()
+        is_adapter = data.meta_info.pop("is_adapter", False)
+        adapter_ctx = self.peft_cls.disable_adapter(self.actor_module) if is_adapter else nullcontext()
         # we should always recompute old_log_probs when it is HybridEngine
-        config_source = self.config.ref if is_lora else self.config.rollout
+        config_source = self.config.ref if is_adapter else self.config.rollout
         data.meta_info["micro_batch_size"] = config_source.log_prob_micro_batch_size_per_gpu
         data.meta_info["max_token_len"] = config_source.log_prob_max_token_len_per_gpu
         data.meta_info["use_dynamic_bsz"] = config_source.log_prob_use_dynamic_bsz
@@ -888,9 +888,9 @@ class ActorRolloutRefWorker(MegatronWorker, DistProfilerExtension):
             RouterReplay.set_global_router_replay_action(RouterReplayAction.REPLAY_FORWARD)
 
         with adapter_ctx:
-            output, entropys, layers_topk_idx = self.actor.compute_log_prob(data=data, calculate_entropy=not is_lora)
-        tensors = {"ref_log_prob": output} if is_lora else {"old_log_probs": output}
-        if not is_lora:
+            output, entropys, layers_topk_idx = self.actor.compute_log_prob(data=data, calculate_entropy=not is_adapter)
+        tensors = {"ref_log_prob": output} if is_adapter else {"old_log_probs": output}
+        if not is_adapter:
             tensors["entropys"] = entropys
         output = DataProto.from_dict(
             tensors=tensors,
@@ -1094,7 +1094,7 @@ class CriticWorker(MegatronWorker, DistProfilerExtension):
             override_model_config=override_model_config,
             override_ddp_config=override_ddp_config,
             peft_cls=self.peft_cls,
-            peft_config=self.config.model.get("lora", None),
+            peft_config=self.config.model.get("lora") or self.config.model.get("oft") or None,
         )
         self.tf_config = updated_tf_config
         # note that here critic_module will be a list to be compatible with the construction of interleaved pp (vpp).

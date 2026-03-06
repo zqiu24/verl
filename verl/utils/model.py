@@ -256,7 +256,7 @@ def check_exclude_modules(config, key: str) -> bool:
     Adapted from https://github.com/huggingface/peft/blob/main/src/peft/tuners/tuners_utils.py
 
     Args:
-        config (`LoraConfig` | `LycorisConfig`): A config to match exclude modules from
+        config (`LoraConfig` | `OFTConfig` | `LycorisConfig`): A config to match exclude modules from
         key (`str`): A key to search any matches in config
 
     Returns:
@@ -279,7 +279,7 @@ def check_target_modules(config, key: str) -> bool:
     Adapted from https://github.com/huggingface/peft/blob/main/src/peft/tuners/tuners_utils.py
 
     Args:
-        config (`LoraConfig` | `LycorisConfig`): A config to match target modules from
+        config (`LoraConfig` | `OFTConfig` | `LycorisConfig`): A config to match target modules from
         key (`str`): A key to search any matches in config
 
     Returns:
@@ -773,6 +773,40 @@ def get_lora_rank_from_adapter(adapter_path: str | os.PathLike) -> int:
         raise ValueError(f"Invalid JSON in {config_path}: {e}") from e
     except (KeyError, ValueError) as e:
         raise ValueError(f"Cannot parse LoRA rank from {config_path}: {e}") from e
+
+def get_oft_block_size_from_adapter(adapter_path: str | os.PathLike) -> int:
+    """
+    Extract OFT block size from adapter configuration file.
+
+    Args:
+        adapter_path: Path to OFT adapter directory
+
+    Returns:
+        OFT block size value from adapter_config.json
+
+    Raises:
+        FileNotFoundError: If adapter path or config file doesn't exist
+        ValueError: If config file is invalid or missing rank
+    """
+    adapter_path = os.path.abspath(os.path.expanduser(str(adapter_path)))
+
+    if not os.path.exists(adapter_path):
+        raise FileNotFoundError(f"OFT adapter path not found: {adapter_path}")
+
+    config_path = os.path.join(adapter_path, "adapter_config.json")
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"adapter_config.json not found in {adapter_path}")
+
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            config = json.load(f)
+            if "oft_block_size" not in config:
+                raise ValueError(f"OFT block size 'oft_block_size' not found in {config_path}")
+            return int(config["oft_block_size"])
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in {config_path}: {e}") from e
+    except (KeyError, ValueError) as e:
+        raise ValueError(f"Cannot parse OFT block size from {config_path}: {e}") from e
 
 
 @dataclass

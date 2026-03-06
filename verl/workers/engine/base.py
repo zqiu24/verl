@@ -221,7 +221,7 @@ class BaseEngine:
 
     def disable_adapter(self) -> ContextManager:
         """
-        Disable all adapters temporarily under the context in the model for LoRA
+        Disable all adapters temporarily under the context in the model for LoRA / OFT
         """
         return nullcontext()
 

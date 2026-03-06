@@ -442,7 +442,7 @@ def offload_megatron_model_to_cpu(models):
                         # if the grad_data size is already zero, we assume that it is already offloaded
                         buffer.grad_data_size = buffer.grad_data.storage().size()
                         buffer.grad_data.storage().resize_(0)
-            # Offload frozen parameters not in DDP buffers (e.g. base model in LoRA/PEFT)
+            # Offload frozen parameters not in DDP buffers (e.g. base model in LoRA/OFT/PEFT)
             # DDP buffers only contain requires_grad=True params, so frozen params must be offloaded separately.
             for param in model_chunk.module.parameters():
                 if not param.requires_grad and param.device.type != "cpu":
@@ -481,7 +481,7 @@ def load_megatron_model_to_gpu(models, load_grad=True, load_frozen_params=True):
                         # copy data from cpu to cuda
                         buffer.param_data.copy_(buffer.param_data.cpu_data, non_blocking=True)
 
-            # Load frozen parameters that were offloaded (e.g. base model in LoRA/PEFT)
+            # Load frozen parameters that were offloaded (e.g. base model in LoRA/OFT/PEFT)
             if load_frozen_params:
                 device_id = get_device_id()
                 for param in model_chunk.module.parameters():

@@ -68,7 +68,7 @@ class VeOmniEngine(FSDPEngine):
         """
         Initialize the VeOmniEngine.
 
-        Sets up distributed device meshes, LoRA, and offload policies based on config.
+        Sets up distributed device meshes, LoRA / OFT, and offload policies based on config.
 
         Args:
             config: Configuration object with VeOmni and model settings.
@@ -115,6 +115,7 @@ class VeOmniEngine(FSDPEngine):
         self._is_offload_param = self.engine_config.param_offload
         self._is_offload_optimizer = self.engine_config.optimizer_offload
         self._is_lora = self.model_config.lora_rank > 0
+        self._is_oft = self.model_config.oft_block_size > 0
 
         self.use_ulysses_sp = parallel_state.get_parallel_state().sp_enabled
         self.ulysses_sequence_parallel_size = self.engine_config.ulysses_parallel_size
@@ -443,7 +444,7 @@ class VeOmniEngine(FSDPEngine):
                     else:
                         yield name, unsharded_tensor
 
-        # TODO: support VeOmni LoRA
+        # TODO: support VeOmni LoRA / OFT
         return param_generator(), None
 
 

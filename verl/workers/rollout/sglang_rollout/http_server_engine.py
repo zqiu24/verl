@@ -432,6 +432,7 @@ class HttpServerAdapter(EngineBase):
         top_logprobs_num: Optional[int] = None,
         token_ids_logprob: Optional[list[int]] = None,
         lora_path: Optional[str] = None,
+        oft_path: Optional[str] = None,
         custom_logit_processor: Optional[Callable] = None,
     ) -> dict[str, Any]:
         """Generate text using the SGLang server.
@@ -453,6 +454,7 @@ class HttpServerAdapter(EngineBase):
             token_ids_logprob (Optional[List[int]], optional): Specific token IDs for
                 log probability calculation. Defaults to None.
             lora_path (Optional[str], optional): Path to LoRA adapter weights. Defaults to None.
+            oft_path (Optional[str], optional): Path to OFT adapter weights. Defaults to None.
             custom_logit_processor (Optional[Callable], optional): Custom logit processing function.
                 Defaults to None.
 
@@ -473,6 +475,7 @@ class HttpServerAdapter(EngineBase):
             "top_logprobs_num": top_logprobs_num,
             "token_ids_logprob": token_ids_logprob,
             "lora_path": lora_path,
+            "oft_path": oft_path,
             "custom_logit_processor": custom_logit_processor,
         }
         # Filter out None values
@@ -486,6 +489,7 @@ class HttpServerAdapter(EngineBase):
         input_ids: Optional[list[int]] = None,
         image_data: Optional[Any] = None,
         lora_path: Optional[str] = None,
+        oft_path: Optional[str] = None,
     ) -> dict[str, Any]:
         assert self.server_args.is_embedding, "Score is only supported for embedding models"
         payload = {
@@ -493,6 +497,7 @@ class HttpServerAdapter(EngineBase):
             "input_ids": input_ids,
             "image_data": image_data,
             "lora_path": lora_path,
+            "oft_path": oft_path,
         }
         # Filter out None values
         payload = {k: v for k, v in payload.items() if v is not None}
@@ -820,6 +825,7 @@ class AsyncHttpServerAdapter(HttpServerAdapter):
         top_logprobs_num: Optional[int] = None,
         token_ids_logprob: Optional[list[int]] = None,
         lora_path: Optional[str] = None,
+        oft_path: Optional[str] = None,
         custom_logit_processor: Optional[Callable] = None,
     ) -> dict[str, Any]:
         """Generate text using the SGLang server asynchronously."""
@@ -835,6 +841,7 @@ class AsyncHttpServerAdapter(HttpServerAdapter):
             "top_logprobs_num": top_logprobs_num,
             "token_ids_logprob": token_ids_logprob,
             "lora_path": lora_path,
+            "oft_path": oft_path,
             "custom_logit_processor": custom_logit_processor,
         }
 
@@ -857,6 +864,7 @@ class AsyncHttpServerAdapter(HttpServerAdapter):
         top_logprobs_num: Optional[int] = None,
         token_ids_logprob: Optional[list[int]] = None,
         lora_path: Optional[str] = None,
+        oft_path: Optional[str] = None,
         custom_logit_processor: Optional[Callable] = None,
     ) -> dict[str, Any]:
         """Async generate method that mirrors AsyncEngine.async_generate interface.
@@ -882,6 +890,7 @@ class AsyncHttpServerAdapter(HttpServerAdapter):
             token_ids_logprob (Optional[List[int]], optional): Specific token IDs for
                 log probability calculation. Defaults to None.
             lora_path (Optional[str], optional): Path to LoRA adapter weights. Defaults to None.
+            oft_path (Optional[str], optional): Path to OFT adapter weights. Defaults to None.
             custom_logit_processor (Optional[Callable], optional): Custom logit processing function.
                 Defaults to None.
 
@@ -902,6 +911,7 @@ class AsyncHttpServerAdapter(HttpServerAdapter):
             top_logprobs_num=top_logprobs_num,
             token_ids_logprob=token_ids_logprob,
             lora_path=lora_path,
+            oft_path=oft_path,
             custom_logit_processor=custom_logit_processor,
         )
 
@@ -911,6 +921,7 @@ class AsyncHttpServerAdapter(HttpServerAdapter):
         input_ids: Optional[list[int]] = None,
         image_data: Optional[Any] = None,
         lora_path: Optional[str] = None,
+        oft_path: Optional[str] = None,
     ) -> dict[str, Any]:
         logger.info("reward_score() started")
         payload = {
@@ -918,6 +929,7 @@ class AsyncHttpServerAdapter(HttpServerAdapter):
             "input_ids": input_ids,
             "image_data": image_data,
             "lora_path": lora_path,
+            "oft_path": oft_path,
         }
         # Filter out None values
         payload = {k: v for k, v in payload.items() if v is not None}
@@ -933,12 +945,14 @@ class AsyncHttpServerAdapter(HttpServerAdapter):
         input_ids: Optional[list[int]] = None,
         image_data: Optional[Any] = None,
         lora_path: Optional[str] = None,
+        oft_path: Optional[str] = None,
     ) -> dict[str, Any]:
         return await self.reward_score(
             prompt=prompt,
             input_ids=input_ids,
             image_data=image_data,
             lora_path=lora_path,
+            oft_path=oft_path,
         )
 
     async def abort_request(self, rid: str = "", abort_all: bool = False) -> dict[str, Any]:

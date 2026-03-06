@@ -115,12 +115,13 @@ class HFModelConfig(BaseConfig):
 
     use_remove_padding: bool = True
 
-    # TODO: unify fsdp and megatron lora config
-    # fsdp lora related. We may setup a separate config later
+    # TODO: unify fsdp and megatron lora / oft config
+    # fsdp lora / oft related. We may setup a separate config later
     lora_rank: int = 0
     lora_alpha: int = 16
+    oft_block_size: int = 0
     target_modules: Optional[Any] = "all-linear"  # allow both "all-linear" and ["q_proj","k_proj"]
-    target_parameters: Optional[list[str]] = None  # for lora adapter on nn.Parameter
+    target_parameters: Optional[list[str]] = None  # for lora / oft adapter on nn.Parameter
 
     exclude_modules: Optional[str] = None
 
@@ -129,6 +130,9 @@ class HFModelConfig(BaseConfig):
 
     # megatron lora config
     lora: dict[str, Any] = field(default_factory=dict)
+
+    # megatron oft config
+    oft: dict[str, Any] = field(default_factory=dict)
 
     # path to pre-trained LoRA adapter to load for continued training
     lora_adapter_path: Optional[str] = None

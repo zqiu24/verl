@@ -127,6 +127,7 @@ def get_fsdp_wrap_policy(module, config=None, is_lora=False, is_oft=False):
                 and getattr(module, "weight", None) is not None
                 and module.weight.requires_grad
             )
+
         lambda_policy = functools.partial(lambda_auto_wrap_policy, lambda_fn=lambda_policy_fn)
         policies.append(lambda_policy)
 
@@ -880,13 +881,12 @@ def normalize_peft_param_name(params: dict) -> dict:
     def _normalize_peft_name(name: str) -> str:
         return name.replace("base_model.model.", "").replace("base_model.", "").replace(".base_layer", "")
 
-    def _is_lora_key(name: str) -> bool:
-        # catch typical PEFT keys
-        return ("lora_" in name) or (".adapter_" in name)
-
+    def _is_adapter_key(name: str) -> bool:
+        return ("lora_" in name) or ("oft_" in name) or (".adapter_" in name)
+    
     params = [(_normalize_peft_name(k), v) for k, v in params.items()]
-    # strip any residual LoRA tensors
-    params = {k: v for k, v in params if not _is_lora_key(k)}
+    # strip any residual LoRA / OFT adapter tensors
+    params = {k: v for k, v in params if not _is_adapter_key(k)}
     return params
 
 
@@ -909,6 +909,25 @@ def _merge_or_unmerge_lora_(module, merge: bool):
                     m.unmerge()
 
 
+def _merge_or_unmerge_oft_(module, merge: bool):
+    """Merge or unmerge OFT adapters in a module.
+
+    Args:
+        module: The module containing OFT layers
+        merge: If True, merge OFT into base model; if False, unmerge OFT
+    """
+    from peft.tuners.oft import OFTLayer
+
+    with torch.no_grad():
+        for m in module.modules():
+            if isinstance(m, OFTLayer):
+                is_merged = getattr(m, "merged", False)
+                if merge and not is_merged:
+                    m.merge()
+                elif (not merge) and is_merged:
+                    m.unmerge()
+
+
 # merged_adapters
 def _clean_merged_lora_(module):
     """Cleans the merged lora adapters"""
@@ -922,15 +941,27 @@ def _clean_merged_lora_(module):
                     m.merged_adapters = []
 
 
+# merged_adapters
+def _clean_merged_oft_(module):
+    """Cleans the merged oft adapters"""
+    from peft.tuners.oft import OFTLayer
+
+    with torch.no_grad():
+        for m in module.modules():
+            if isinstance(m, OFTLayer):
+                merged_adapters = getattr(m, "merged_adapters", False)
+                if merged_adapters:
+                    m.merged_adapters = []
+
 def fsdp_merge_unmerge(module: nn.Module, do_merge: bool):
-    """Merge or unmerge LoRA adapters in FSDP module.
+    """Merge or unmerge LoRA / OFT adapters in FSDP module.
 
     For FSDP (v1), it gathers all model parameters to each device, which may cause OOM.
     For FSDP2, it gathers model parameters layer-by-layer to reduce memory footprint.
 
     Args:
-        module: The FSDP module to merge/unmerge LoRA adapters
-        do_merge: If True, merge LoRA into base model; if False, unmerge LoRA
+        module: The FSDP module to merge/unmerge LoRA / OFT adapters
+        do_merge: If True, merge LoRA / OFT into base model; if False, unmerge LoRA / OFT
     """
     version = fsdp_version(module)
     assert version in [1, 2], f"fsdp_merge_unmerge requires FSDP module, got version {version}"
@@ -939,22 +970,24 @@ def fsdp_merge_unmerge(module: nn.Module, do_merge: bool):
         # Unshard → merge → Reshard
         with FSDP.summon_full_params(module, writeback=True, with_grads=False):
             _merge_or_unmerge_lora_(module, merge=do_merge)
+            _merge_or_unmerge_oft_(module, merge=do_merge)
     else:
         # FSDP2: Unshard → merge → Reshard layer-by-layer
         for name, submodule in module.named_modules():
             if isinstance(submodule, FSDPModule) and name != "":  # skip root model
                 with FSDP.summon_full_params(submodule, writeback=True, with_grads=False):
                     _merge_or_unmerge_lora_(submodule, merge=do_merge)
+                    _merge_or_unmerge_oft_(submodule, merge=do_merge)
 
 
 def backup_base_model_weights(module):
-    """Backup base model weights to CPU with LoRA temporarily disabled.
+    """Backup base model weights to CPU with LoRA / OFT temporarily disabled.
 
-    This function temporarily disables LoRA adapters, backs up the clean base model weights
+    This function temporarily disables LoRA / OFT adapters, backs up the clean base model weights
     to CPU, then re-enables the adapters.
 
     Args:
-        module: The PEFT model with LoRA adapters
+        module: The PEFT model with LoRA / OFT adapters
 
     Returns:
         dict: Dictionary mapping parameter name to CPU tensor backup of base model weights
@@ -967,9 +1000,9 @@ def backup_base_model_weights(module):
         if isinstance(module, PeftModel):
             # Temporarily disable adapters to get clean base model weights
             with module.disable_adapter():
-                # Backup base model weights (excluding lora parameters)
+                # Backup base model weights (excluding lora / oft parameters)
                 for name, param in module.named_parameters():
-                    if "lora" not in name.lower():
+                    if "lora" not in name.lower() and "oft" not in name.lower():
                         backup[name] = param.data.clone().cpu()
         else:
             # For non-PEFT models, just backup all parameters
@@ -982,10 +1015,10 @@ def restore_base_model_weights(module, backup):
     """Restore base model weights from CPU backup.
 
     This function restores the base model weights from the CPU backup, effectively
-    undoing any LoRA merge operations.
+    undoing any LoRA / OFT merge operations.
 
     Args:
-        module: The PEFT model with LoRA adapters
+        module: The PEFT model with LoRA / OFT adapters
         backup: Dictionary mapping parameter name to CPU tensor backup of base model weights
     """
     with torch.no_grad():
@@ -1025,6 +1058,41 @@ def merged_lora_context(actor, backup_adapters=False):
             # Restore base model weights from CPU backup (effectively undoing the merge)
             restore_base_model_weights(actor, base_weights_backup)
             _clean_merged_lora_(actor)
+        else:
+            # Fall back to unmerge if no backup was made
+            fsdp_merge_unmerge(actor, do_merge=False)
+
+@contextmanager
+def merged_oft_context(actor, backup_adapters=False):
+    """Context manager to temporarily merge OFT adapters.
+
+    This context manager merges OFT adapters into the base model weights,
+    performs operations (like syncing weights to vLLM), then restores the base model
+    weights from backup.
+
+    Args:
+        actor: The actor module with OFT adapters to merge
+        backup_adapters: If True, backup base model weights (with OFT disabled) before
+            merging and restore them after. This is more numerically stable than unmerging.
+
+    Yields:
+        None
+    """
+    base_weights_backup = None
+    if backup_adapters:
+        # Backup base model weights with OFT temporarily disabled
+        base_weights_backup = backup_base_model_weights(actor)
+
+    # Merge OFT adapters into base model
+    fsdp_merge_unmerge(actor, do_merge=True)
+    try:
+        # Do work while merged (sync_to_vllm / generate / etc.)
+        yield
+    finally:
+        if backup_adapters and base_weights_backup is not None:
+            # Restore base model weights from CPU backup (effectively undoing the merge)
+            restore_base_model_weights(actor, base_weights_backup)
+            _clean_merged_oft_(actor)
         else:
             # Fall back to unmerge if no backup was made
             fsdp_merge_unmerge(actor, do_merge=False)

@@ -257,7 +257,8 @@ class FSDPCriticModelCfg(BaseModelConfig):
         fsdp_config (FSDPEngineConfig): FSDP-specific configuration block.
         lora_rank (int): Set to positive value to enable LoRA (e.g., 32).
         lora_alpha (int): LoRA scaling factor.
-        target_modules (Union[str, List[str]]): LoRA target modules: "all-linear" or list of layer names.
+        oft_block_size (int): Set to positive value to enable OFT (e.g., 16).
+        target_modules (Union[str, List[str]]): LoRA / OFT target modules: "all-linear" or list of layer names.
     """
 
     use_shm: bool = False
@@ -267,6 +268,7 @@ class FSDPCriticModelCfg(BaseModelConfig):
     fsdp_config: FSDPEngineConfig = field(default_factory=FSDPEngineConfig)
     lora_rank: int = 0
     lora_alpha: int = 16
+    oft_block_size: int = 32
     target_modules: str | list[str] = "all-linear"
     # TiledMLP configuration for memory-efficient MLP computation
     tiled_mlp: dict = field(default_factory=lambda: {"enabled": False, "num_shards": 4})

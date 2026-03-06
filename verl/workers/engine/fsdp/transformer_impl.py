@@ -24,7 +24,7 @@ from typing import Callable, ContextManager, Optional
 
 import torch
 import torch.distributed
-from peft import LoraConfig, TaskType, get_peft_model
+from peft import LoraConfig, OFTConfig, TaskType, get_peft_model
 from tensordict import TensorDict
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.api import FullStateDictConfig, ShardedStateDictConfig, StateDictType
@@ -45,6 +45,7 @@ from verl.utils.fsdp_utils import (
     MixedPrecisionPolicy,
     apply_fsdp2,
     collect_lora_params,
+    collect_oft_params,
     fsdp2_clip_grad_norm_,
     fsdp2_load_full_state_dict,
     fsdp_version,
@@ -54,10 +55,12 @@ from verl.utils.fsdp_utils import (
     load_fsdp_model_to_gpu,
     load_fsdp_optimizer,
     merged_lora_context,
+    merged_oft_context,
     normalize_peft_param_name,
     offload_fsdp_model_to_cpu,
     offload_fsdp_optimizer,
     replace_lora_wrapper,
+    replace_oft_wrapper,
 )
 from verl.utils.model import convert_weight_keys, extract_multi_modal_inputs
 from verl.utils.py_functional import convert_to_regular_types
@@ -98,7 +101,7 @@ class FSDPEngine(BaseEngine):
         """
         Initialize the FSDPEngine.
 
-        Sets up distributed device meshes, LoRA, and offload policies based on config.
+        Sets up distributed device meshes, LoRA / OFT, and offload policies based on config.
 
         Args:
             config: Configuration object with FSDP and model settings.
@@ -132,6 +135,7 @@ class FSDPEngine(BaseEngine):
         self._is_offload_param = self.engine_config.param_offload
         self._is_offload_optimizer = self.engine_config.optimizer_offload
         self._is_lora = self.model_config.lora_rank > 0
+        self._is_oft = self.model_config.oft_block_size > 0
 
         # QAT (Quantization-Aware Training)
         self._qat_config = getattr(self.engine_config, "qat", None)
@@ -328,7 +332,7 @@ class FSDPEngine(BaseEngine):
                 "exclude_modules": convert_to_regular_types(self.model_config.exclude_modules),
                 "bias": "none",
             }
-            module = get_peft_model(module, LoraConfig(**oft_config))
+            module = get_peft_model(module, OFTConfig(**oft_config))
 
         return module
 
@@ -354,6 +358,7 @@ class FSDPEngine(BaseEngine):
             module=module,
             config=self.engine_config.wrap_policy,
             is_lora=self.model_config.lora_rank > 0,
+            is_oft=self.model_config.oft_block_size > 0,
         )
 
         fsdp_mesh = self.device_mesh
@@ -532,6 +537,9 @@ class FSDPEngine(BaseEngine):
         # Apply LoRA adapters if low-rank adaptation is enabled
         if self._is_lora:
             module = self._build_lora_module(module)
+        # Apply OFT adapters if OFT is enabled
+        if self._is_oft:
+            module = self._build_oft_module(module)
 
         # Apply QAT before FSDP wrapping (training only)
         if self._qat_enabled and not self.engine_config.forward_only:

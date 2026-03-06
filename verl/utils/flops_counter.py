@@ -281,8 +281,10 @@ def _estimate_deepseek_v3_flops(config, tokens_sum, batch_seqlens, delta_time):
     attn_linear_N = 0
     q_head_dim = config.qk_nope_head_dim + config.qk_rope_head_dim
     if config.q_lora_rank is None:
+        raise ValueError("Add OFT support!")
         attn_linear_N += hidden_size * num_query_heads * q_head_dim
     else:
+        raise ValueError("Add OFT support!")
         attn_linear_N += hidden_size * config.q_lora_rank
         attn_linear_N += num_query_heads * q_head_dim * config.q_lora_rank
 
